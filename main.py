@@ -4,72 +4,80 @@ import sys
 import pandas as pd
 from playwright.async_api import async_playwright
 
-# --- CONFIGURACIÓN PARA EL EJECUTABLE ---
-# Esto obliga a Playwright a buscar los navegadores en la carpeta del bot
-if getattr(sys, 'frozen', False):
-    # Si estamos en el .exe
-    bundle_dir = sys._MEIPASS
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(bundle_dir, "pw-browsers")
-else:
-    # Si estamos ejecutando el script .py normalmente
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+# 1. Configuración para que el EXE encuentre el navegador localmente
+os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '0'
 
 async def run_automation():
-    print("Iniciando RPA Asocebu...")
+    print("--- Iniciando Bot RPA Asocebu ---")
     
-    # 1. Cargar base de datos local
+    # 2. Carga y validación del Excel
+    file_path = "database.xlsx"
+    if not os.path.exists(file_path):
+        print(f"Error: No se encontró el archivo {file_path}")
+        input("Presione Enter para salir...")
+        return
+
     try:
-        local_data = pd.read_excel("database.xlsx")
-        print(f"Cargados {len(local_data)} registros para procesar.")
+        local_data = pd.read_excel(file_path)
+        # Normalizar nombres de columnas (quitar espacios y pasar a minúsculas para comparar)
+        local_data.columns = [str(c).strip() for c in local_data.columns]
+        
+        # Buscar la columna correcta de forma flexible
+        target_col = None
+        for col in local_data.columns:
+            if col.lower() == 'registration_number':
+                target_col = col
+                break
+        
+        if not target_col:
+            print("Error: No se encontró la columna 'Registration_Number' en el Excel.")
+            print(f"Columnas detectadas: {list(local_data.columns)}")
+            input("Corrija el Excel y presione Enter para salir...")
+            return
+            
     except Exception as e:
-        print(f"Error: No se encontró 'database.xlsx'. {e}")
+        print(f"Error al leer el Excel: {e}")
+        input("Presione Enter para salir...")
         return
 
     results = []
 
     async with async_playwright() as p:
-        # Lanzar navegador (headless=False para que el cliente vea el proceso)
-        browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context()
-        page = await context.new_page()
+        # 3. Lanzamiento del navegador
+        print("Abriendo navegador...")
+        try:
+            browser = await p.chromium.launch(headless=False) # Cambiar a True para ocultar
+            page = await browser.new_page()
+            await page.goto("https://sir.asocebu.com.co/Genealogias/", timeout=60000)
 
-        for index, row in local_data.iterrows():
-            animal_id = str(row['Registration_Number'])
-            print(f"Consultando animal: {animal_id}")
+            for index, row in local_data.iterrows():
+                animal_id = str(row[target_col]).strip()
+                print(f"Consultando animal: {animal_id}")
 
-            try:
-                await page.goto("https://sir.asocebu.com.co/Genealogias/", timeout=60000)
-                
-                # Selector del cuadro de búsqueda (ajustar según inspección real)
-                await page.fill('input[id*="txtBusqueda"]', animal_id)
-                await page.keyboard.press("Enter")
-                
-                # Esperar a que la tabla o el mensaje de 'no resultados' aparezca
-                await page.wait_for_timeout(3000) 
+                try:
+                    # Lógica de búsqueda (ajustar selectores según la web real)
+                    await page.fill('input[name="txtBusqueda"]', animal_id)
+                    await page.click('#btnConsultar') # Selector de ejemplo
+                    await page.wait_for_timeout(2000)
 
-                # Lógica de extracción (ejemplo básico)
-                # Aquí deberías capturar los selectores específicos de la tabla de Asocebu
-                exists = await page.query_selector("table")
-                
-                if exists:
-                    status = "Encontrado"
-                    web_info = "Datos extraídos" # Aquí extraes el texto real
-                else:
-                    status = "No encontrado"
-                    web_info = "N/A"
+                    # Extraer dato (ejemplo)
+                    web_name = await page.inner_text('#lblNombreAnimal') 
+                    results.append({**row, "Web_Status": "Encontrado", "Nombre_Web": web_name})
+                except:
+                    results.append({**row, "Web_Status": "No Encontrado", "Nombre_Web": "N/A"})
 
-                results.append({**row, "Status_Web": status, "Info_Web": web_info})
+            # 4. Generar Reporte Final
+            final_df = pd.DataFrame(results)
+            output_file = "comparison_report.xlsx"
+            final_df.to_excel(output_file, index=False)
+            print(f"--- Proceso completado. Reporte generado: {output_file} ---")
 
-            except Exception as e:
-                print(f"Error procesando {animal_id}: {e}")
-                results.append({**row, "Status_Web": "Error de conexión", "Info_Web": str(e)})
+        except Exception as e:
+            print(f"Error durante la automatización: {e}")
+        finally:
+            await browser.close()
 
-        # 2. Generar reporte final
-        final_df = pd.DataFrame(results)
-        final_df.to_excel("comparison_report.xlsx", index=False)
-        print("Proceso finalizado. Reporte generado: comparison_report.xlsx")
-        
-        await browser.close()
+    input("Presione Enter para cerrar esta ventana...")
 
 if __name__ == "__main__":
     asyncio.run(run_automation())
