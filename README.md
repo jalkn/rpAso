@@ -40,3 +40,16 @@ Si deseas ejecutar el proyecto localmente o realizar auditorías al código:
 1. Clonar el repositorio:
    ```bash
    git clone [https://github.com/jalkn/rpAso.git](https://github.com/jalkn/rpAso.git)
+
+2. Instalar dependencias:
+    ```bash
+    pip install -r requirements.txt
+
+3. Instalar navegadores de Playwright:
+    ```bash
+    playwright install chromium
+
+
+4. Ejecutar la aplicación web:
+    ```bash
+    streamlit run app.py
