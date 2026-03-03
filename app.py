@@ -5,7 +5,7 @@ from playwright.async_api import async_playwright
 import os
 
 st.set_page_config(page_title="RPA Asocebu Pro", page_icon="🐄", layout="wide")
-st.title("🐄 Auditoría de Inventario (Limpieza de Cabeceras)")
+st.title("🐄 Auditoría de Inventario Ganadería")
 
 with st.sidebar:
     st.header("Configuración")
