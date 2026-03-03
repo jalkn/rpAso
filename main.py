@@ -1,83 +1,60 @@
 import asyncio
 import os
-import sys
 import pandas as pd
 from playwright.async_api import async_playwright
 
-# 1. Configuración para que el EXE encuentre el navegador localmente
 os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '0'
 
-async def run_automation():
-    print("--- Iniciando Bot RPA Asocebu ---")
-    
-    # 2. Carga y validación del Excel
+async def main():
+    print("--- RPA ASOCEBU: CONSOLIDADOR DE POTREROS ---")
     file_path = "database.xlsx"
+    
     if not os.path.exists(file_path):
-        print(f"Error: No se encontró el archivo {file_path}")
-        input("Presione Enter para salir...")
+        print(f"Error: No se encuentra {file_path}")
         return
 
-    try:
-        local_data = pd.read_excel(file_path)
-        # Normalizar nombres de columnas (quitar espacios y pasar a minúsculas para comparar)
-        local_data.columns = [str(c).strip() for c in local_data.columns]
-        
-        # Buscar la columna correcta de forma flexible
-        target_col = None
-        for col in local_data.columns:
-            if col.lower() == 'registration_number':
-                target_col = col
-                break
-        
-        if not target_col:
-            print("Error: No se encontró la columna 'Registration_Number' en el Excel.")
-            print(f"Columnas detectadas: {list(local_data.columns)}")
-            input("Corrija el Excel y presione Enter para salir...")
-            return
-            
-    except Exception as e:
-        print(f"Error al leer el Excel: {e}")
-        input("Presione Enter para salir...")
-        return
+    # Leer todas las pestañas del cliente
+    print("Leyendo pestañas del archivo...")
+    xl = pd.ExcelFile(file_path)
+    all_sheets = []
+    for sheet in xl.sheet_names:
+        df = pd.read_excel(file_path, sheet_name=sheet)
+        df['Pestaña_Origen'] = sheet
+        all_sheets.append(df)
+    
+    df_total = pd.concat(all_sheets, ignore_index=True)
+    df_total.columns = [str(c).strip() for c in df_total.columns]
+
+    # Pedir usuario al iniciar (según requerimiento del cliente)
+    print("\nCuentas disponibles: 1. 1307 | 2. 2306")
+    opcion = input("Seleccione el número de cuenta a usar: ")
+    user_id = "1307" if opcion == "1" else "2306"
 
     results = []
-
     async with async_playwright() as p:
-        # 3. Lanzamiento del navegador
-        print("Abriendo navegador...")
-        try:
-            browser = await p.chromium.launch(headless=False) # Cambiar a True para ocultar
-            page = await browser.new_page()
-            await page.goto("https://sir.asocebu.com.co/Genealogias/", timeout=60000)
+        browser = await p.chromium.launch(headless=False)
+        page = await browser.new_page()
+        await page.goto("https://sir.asocebu.com.co/Genealogias/")
 
-            for index, row in local_data.iterrows():
-                animal_id = str(row[target_col]).strip()
-                print(f"Consultando animal: {animal_id}")
+        for i, row in df_total.iterrows():
+            animal_id = str(row.get('N° ANIMAL', '')).strip()
+            if not animal_id or "total" in animal_id.lower(): continue
+            
+            print(f"[{i+1}/{len(df_total)}] Consultando: {animal_id}")
+            try:
+                await page.fill('input[name="txtBusqueda"]', animal_id)
+                await page.press('input[name="txtBusqueda"]', "Enter")
+                await page.wait_for_timeout(2000)
+                nombre = await page.inner_text('#lblNombreAnimal')
+                results.append({**row, "Cuenta": user_id, "Resultado": nombre})
+            except:
+                results.append({**row, "Cuenta": user_id, "Resultado": "No Encontrado"})
 
-                try:
-                    # Lógica de búsqueda (ajustar selectores según la web real)
-                    await page.fill('input[name="txtBusqueda"]', animal_id)
-                    await page.click('#btnConsultar') # Selector de ejemplo
-                    await page.wait_for_timeout(2000)
-
-                    # Extraer dato (ejemplo)
-                    web_name = await page.inner_text('#lblNombreAnimal') 
-                    results.append({**row, "Web_Status": "Encontrado", "Nombre_Web": web_name})
-                except:
-                    results.append({**row, "Web_Status": "No Encontrado", "Nombre_Web": "N/A"})
-
-            # 4. Generar Reporte Final
-            final_df = pd.DataFrame(results)
-            output_file = "comparison_report.xlsx"
-            final_df.to_excel(output_file, index=False)
-            print(f"--- Proceso completado. Reporte generado: {output_file} ---")
-
-        except Exception as e:
-            print(f"Error durante la automatización: {e}")
-        finally:
-            await browser.close()
-
-    input("Presione Enter para cerrar esta ventana...")
+        # Guardar reporte
+        pd.DataFrame(results).to_excel("resultado_auditoria.xlsx", index=False)
+        await browser.close()
+        print("\n--- Proceso Finalizado. Revise resultado_auditoria.xlsx ---")
+        input("Presione Enter para salir...")
 
 if __name__ == "__main__":
-    asyncio.run(run_automation())
+    asyncio.run(main())
