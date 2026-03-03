@@ -3,15 +3,16 @@ import pandas as pd
 import asyncio
 from playwright.async_api import async_playwright
 import os
+import io
 
 st.set_page_config(page_title="RPA Asocebu Pro", page_icon="🐄", layout="wide")
-st.title("🐄 Auditoría de Inventario Ganadería")
+st.title("🐄 Auditoría de Inventario Ganadría")
 
 with st.sidebar:
     st.header("Configuración")
     user_select = st.selectbox("Usuario:", ["1307", "2306"])
     limit_rows = st.number_input("Cantidad de registros a auditar:", min_value=1, value=50)
-    st.info("Nota: Para 163k registros, usa un límite bajo para probar primero.")
+    st.info("Nota: Se recomienda probar con 50 registros para verificar el formato.")
 
 @st.cache_resource
 def install_playwright():
@@ -24,30 +25,27 @@ def procesar_archivo_cliente(file):
     all_dfs = []
     
     for sheet in xl.sheet_names:
-        # 1. Leemos la hoja completa
+        # Leemos la hoja completa para buscar la tabla real
         df_raw = pd.read_excel(file, sheet_name=sheet)
         
-        # 2. BUSQUEDA DE LA TABLA REAL:
-        # Buscamos en qué fila está la palabra "ANIMAL" o "REGISTRO"
+        # BUSQUEDA DINÁMICA DE CABECERA
+        # Buscamos en las primeras 30 filas dónde empieza la tabla real
         header_row = 0
         found = False
-        for i in range(min(len(df_raw), 20)): # Revisamos las primeras 20 filas
+        for i in range(min(len(df_raw), 30)):
             row_values = [str(val).upper() for val in df_raw.iloc[i].values]
-            if any("ANIMAL" in v or "REGISTRO" in v for v in row_values):
+            if any("ANIMAL" in v or "REGISTRO" in v or "ID" == v for v in row_values):
                 header_row = i + 1
                 found = True
                 break
         
-        # 3. Re-leemos la hoja desde la fila correcta
-        if found:
-            df_clean = pd.read_excel(file, sheet_name=sheet, skiprows=header_row)
-        else:
-            df_clean = df_raw # Si no encontramos nada, usamos lo que hay
+        # Re-leemos desde la fila detectada
+        df_clean = pd.read_excel(file, sheet_name=sheet, skiprows=header_row) if found else df_raw
             
-        # 4. Normalizar nombres de columnas
+        # Limpieza de nombres de columnas
         df_clean.columns = [str(c).strip().upper().replace('°', '').replace(' ', '_') for c in df_clean.columns]
-        df_clean = df_clean.dropna(how='all', axis=0) # Quitar filas vacías
-        df_clean['ORIGEN_POTRERO'] = sheet
+        df_clean = df_clean.dropna(how='all', axis=0)
+        df_clean['HOJA_ORIGEN'] = sheet
         all_dfs.append(df_clean)
         
     return pd.concat(all_dfs, ignore_index=True)
@@ -57,39 +55,41 @@ async def run_web_automation(df, user_code, max_rows):
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    # Identificar columna ID de forma flexible
+    # Identificar la columna que contiene los IDs de los animales
     col_id = next((c for c in df.columns if any(p in c for p in ['ANIMAL', 'REGISTRO', 'IDENTI'])), None)
     
     if not col_id:
-        st.error(f"❌ Columnas detectadas: {list(df.columns)}. No encontré ninguna que diga 'ANIMAL'.")
+        st.error(f"❌ No se encontró la columna de identificación. Columnas detectadas: {list(df.columns)}")
         return pd.DataFrame()
 
-    st.success(f"🔍 Columna identificada: **{col_id}**")
+    st.success(f"🔍 Auditando mediante columna: **{col_id}**")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
         await page.goto("https://sir.asocebu.com.co/Genealogias/", timeout=60000)
 
-        df_to_process = df.head(max_rows)
+        # Procesamos solo la muestra solicitada
+        df_to_process = df.head(max_rows).copy()
+        
         for index, row in df_to_process.iterrows():
             animal_id = str(row[col_id]).strip().replace('.0', '')
             
             if not animal_id or animal_id.lower() in ['nan', 'none', 'total', '0']:
                 continue
 
-            status_text.text(f"Auditando: {animal_id}...")
+            status_text.text(f"🚀 Procesando {index+1} de {len(df_to_process)}: {animal_id}...")
             
             res_row = row.to_dict()
             try:
                 await page.fill('input[name="txtBusqueda"]', animal_id)
                 await page.keyboard.press("Enter")
-                await page.wait_for_timeout(1800)
+                await page.wait_for_timeout(1500)
                 
                 nombre_web = await page.inner_text('#lblNombreAnimal')
-                res_row.update({"RESULTADO_RPA": "OK", "NOMBRE_WEB": nombre_web})
+                res_row.update({"RESULTADO_RPA": "OK", "NOMBRE_ASOCEBU": nombre_web})
             except:
-                res_row.update({"RESULTADO_RPA": "NO ENCONTRADO", "NOMBRE_WEB": "N/A"})
+                res_row.update({"RESULTADO_RPA": "NO ENCONTRADO", "NOMBRE_ASOCEBU": "N/A"})
             
             results.append(res_row)
             progress_bar.progress((index + 1) / len(df_to_process))
@@ -97,18 +97,31 @@ async def run_web_automation(df, user_code, max_rows):
         await browser.close()
         return pd.DataFrame(results)
 
-uploaded_file = st.file_uploader("Suba el archivo Excel", type=["xlsx"])
+# --- INTERFAZ DE USUARIO ---
+uploaded_file = st.file_uploader("Suba el archivo de Inventario (Excel)", type=["xlsx"])
 
 if uploaded_file:
-    df_consolidado = procesar_archivo_cliente(uploaded_file)
-    st.write("### Vista previa de los datos detectados:")
-    st.dataframe(df_consolidado.head(5))
+    with st.spinner("Leyendo y limpiando archivo..."):
+        df_consolidado = procesar_archivo_cliente(uploaded_file)
+    
+    st.write("### Vista previa de datos detectados:")
+    st.dataframe(df_consolidado.head(10))
 
-    if st.button("🚀 Iniciar Proceso"):
+    if st.button("🚀 Iniciar Auditoría"):
         df_final = asyncio.run(run_web_automation(df_consolidado, user_select, limit_rows))
         
         if not df_final.empty:
-            st.success("Auditoría parcial completada.")
+            st.success("✅ Proceso finalizado.")
             st.dataframe(df_final)
-            csv = df_final.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Descargar Resultados", csv, "reporte.csv", "text/csv")
+            
+            # GENERACIÓN DE EXCEL EN MEMORIA
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                df_final.to_excel(writer, index=False, sheet_name='Auditoria_Asocebu')
+            
+            st.download_button(
+                label="📥 Descargar Reporte Final en Excel",
+                data=buffer.getvalue(),
+                file_name=f"REPORTE_AUDITORIA_{user_select}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
