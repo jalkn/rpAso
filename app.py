@@ -5,7 +5,7 @@ from playwright.async_api import async_playwright
 import os
 
 st.set_page_config(page_title="RPA Asocebu Cloud", page_icon="🐄")
-st.title("🐄 Auditoría de Inventario Multi-Cuenta")
+st.title("🐄 Auditoría de Inventario Ganadería")
 
 # 1. Configuración de Cuentas (Basado en el correo del cliente)
 CUENTAS = {
