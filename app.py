@@ -6,7 +6,7 @@ import os
 import io
 
 st.set_page_config(page_title="RPA Asocebu Pro", page_icon="🐄", layout="wide")
-st.title("🐄 Auditoría de Inventario Ganadría")
+st.title("🐄 Auditoría de Inventario Ganadería")
 
 with st.sidebar:
     st.header("Configuración")
