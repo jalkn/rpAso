@@ -3,6 +3,7 @@ import pandas as pd
 import asyncio
 from playwright.async_api import async_playwright
 import os
+os.system("playwright install chromium")
 
 # Configuración de la página
 st.set_page_config(page_title="RPA Asocebu Cloud", page_icon="🐄")
@@ -46,7 +47,7 @@ async def run_web_automation(df):
 
 # 2. Lógica de ejecución
 if uploaded_file is not None:
-    df_input = pd.read_excel(uploaded_file)
+    df_input = pd.read_excel(uploaded_file, engine='openpyxl')
     
     if st.button("Iniciar Automatización"):
         with st.spinner("El Bot está trabajando en el portal de Asocebu..."):
