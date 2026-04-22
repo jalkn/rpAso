@@ -6,14 +6,14 @@ import os
 import io
 
 st.set_page_config(page_title="RPA Asocebu Pro", page_icon="🐄", layout="wide")
-st.title("🐄 Auditoría de Inventario de Alta Capacidad")
+st.title("🐄 Auditoría Integral: Número, Grupo, Sexo y Color")
 
 with st.sidebar:
-    st.header("Configuración")
-    user_select = st.selectbox("Usuario:", ["1307", "2306"])
-    limit_rows = st.number_input("Límite de registros a auditar:", min_value=1, value=100, step=50)
-    
-    st.warning("Nota: Procesar 163k registros tomaría aprox. 40 horas. Se recomienda usar muestras.")
+    st.header("Configuración de Auditoría")
+    user_select = st.selectbox("Seleccione Usuario:", ["1307", "2306"])
+    limit_rows = st.number_input("Cantidad de registros a validar:", min_value=1, value=100, step=50)
+    st.info("El bot comparará los datos del Excel contra la ficha técnica oficial de Asocebu.")
+    st.warning("Nota: Procesar volúmenes masivos (163k) requiere ejecución por lotes.")
 
 @st.cache_resource
 def install_playwright():
@@ -24,52 +24,44 @@ install_playwright()
 def procesar_archivo_cliente(file):
     xl = pd.ExcelFile(file, engine='openpyxl')
     all_dfs = []
-    
     for sheet in xl.sheet_names:
-        # Leemos sin procesar para encontrar la tabla real
         df_raw = pd.read_excel(file, sheet_name=sheet, header=None)
-        
-        # BUSQUEDA DINÁMICA MEJORADA
         header_row = 0
         found = False
-        # Escaneamos más filas (50) por si el encabezado es muy largo
         for i, row in df_raw.iterrows():
             if i > 50: break 
             row_str = " ".join([str(val).upper() for val in row.values if pd.notna(val)])
-            # Buscamos palabras clave exactas o parciales
+            # Buscamos la fila donde inicia la tabla real basándonos en palabras clave
             if any(k in row_str for k in ["ANIMAL", "REGISTRO", "IDENTIFICACION", "N°"]):
                 header_row = i
                 found = True
                 break
         
-        # Re-leemos con la cabecera correcta
-        if found:
-            df_clean = pd.read_excel(file, sheet_name=sheet, skiprows=header_row)
-        else:
-            df_clean = df_raw # Fallback si no encuentra nada
-            
-        # Limpieza profunda de nombres de columnas
+        df_clean = pd.read_excel(file, sheet_name=sheet, skiprows=header_row) if found else df_raw
+        # Normalizamos nombres de columnas (quitar espacios, puntos, grados)
         df_clean.columns = [str(c).strip().upper().replace('°', '').replace(' ', '_').replace('.', '') for c in df_clean.columns]
-        # Eliminar columnas sin nombre (Unnamed)
         df_clean = df_clean.loc[:, ~df_clean.columns.str.contains('UNNAMED')]
         df_clean = df_clean.dropna(how='all', axis=0)
         
         if not df_clean.empty:
             df_clean['HOJA_ORIGEN'] = sheet
             all_dfs.append(df_clean)
-        
+            
     return pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
 
-async def run_web_automation(df, user_code, max_rows):
+async def run_web_automation(df, max_rows):
     results = []
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    # Buscamos la columna de ID con más variantes para evitar el error de la captura
-    col_id = next((c for c in df.columns if any(p in c for p in ['ANIMAL', 'REGISTRO', 'IDENTI', 'ID', 'NUMERO'])), None)
-    
+    # Mapeo dinámico de columnas del Excel de Argos
+    col_id = next((c for c in df.columns if any(p in c for p in ['ANIMAL', 'REGISTRO', 'ID', 'NUMERO'])), None)
+    col_raza = next((c for c in df.columns if any(p in c for p in ['RAZA', 'GRUPO'])), 'RAZA')
+    col_sexo = next((c for c in df.columns if 'SEXO' in c), 'SEXO')
+    col_color = next((c for c in df.columns if any(p in c for p in ['COLOR', 'PELAJE'])), 'COLOR')
+
     if not col_id:
-        st.error(f"❌ No encontré columna de identificación. Columnas: {list(df.columns)}")
+        st.error(f"❌ No se encontró columna de identificación. Columnas detectadas: {list(df.columns)}")
         return pd.DataFrame()
 
     async with async_playwright() as p:
@@ -77,65 +69,77 @@ async def run_web_automation(df, user_code, max_rows):
         context = await browser.new_context()
         page = await context.new_page()
         
-        # Ir directamente a la herramienta de genealogías
+        # URL de inicio para Genealogías
         await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", timeout=60000)
 
-        df_to_process = df.head(max_rows).copy()
-        
-        for index, row in df_to_process.iterrows():
-            animal_id = str(row[col_id]).strip().split('.')[0] # Limpia decimales .0
-            
-            if not animal_id or animal_id.lower() in ['nan', 'none', 'total', '0', '']:
-                continue
+        df_proc = df.head(max_rows).copy()
+        for index, row in df_proc.iterrows():
+            # Limpiamos el ID (ej. 1307.0 -> 1307)
+            animal_id = str(row[col_id]).strip().split('.')[0]
+            if not animal_id or animal_id.lower() in ['nan', 'none', '0', '']: continue
 
-            status_text.text(f"🚀 Procesando {index+1}/{len(df_to_process)}: ID {animal_id}")
-            
+            status_text.text(f"🔍 Validando {index+1}/{len(df_proc)}: ID {animal_id}")
             res_row = row.to_dict()
+
             try:
-                # 1. SOLUCIÓN TI: Seleccionar "Nro. Registro" explícitamente
-                await page.select_option('select[id*="ddlTipoBusqueda"]', value="1")
-                await page.wait_for_timeout(300)
-                
-                # 2. Búsqueda
+                # 1. Selección de categoría y búsqueda (Requerimiento TI)
+                await page.select_option('select[id*="ddlTipoBusqueda"]', value="1") # 1 = Registro
                 await page.fill('input[id*="txtBusqueda"]', animal_id)
                 await page.keyboard.press("Enter")
+                await page.wait_for_timeout(2500) # Espera carga dinámica
                 
-                # 3. Espera de carga dinámica
-                await page.wait_for_timeout(2500)
-                
-                # 4. Extracción de datos
+                # 2. Extracción de datos fenotípicos desde la web
                 nombre_web = await page.inner_text('#lblNombreAnimal')
-                res_row.update({"ESTADO": "ENCONTRADO", "NOMBRE_ASOCEBU": nombre_web})
+                raza_web = (await page.inner_text('#lblRaza')).upper()
+                sexo_web = (await page.inner_text('#lblSexo')).upper()
+                color_web = (await page.inner_text('#lblColor')).upper()
+
+                # 3. Lógica de Comparación Cuádruple contra el Excel
+                raza_ex = str(row.get(col_raza, '')).upper()
+                sexo_ex = str(row.get(col_sexo, '')).upper()
+                color_ex = str(row.get(col_color, '')).upper()
+
+                # Validaciones (coincidencia parcial para mayor flexibilidad)
+                m_raza = raza_web in raza_ex or raza_ex in raza_web
+                m_sexo = sexo_web[0] == sexo_ex[0] if sexo_web and sexo_ex else False
+                m_color = color_web in color_ex or color_ex in color_web
+
+                if m_raza and m_sexo and m_color:
+                    res_row.update({"RESULTADO_RPA": "✅ COINCIDENCIA TOTAL", 
+                                   "DETALLE": f"Web: {raza_web}, {sexo_web}, {color_web}"})
+                else:
+                    dif = []
+                    if not m_raza: dif.append("Grupo/Raza")
+                    if not m_sexo: dif.append("Sexo")
+                    if not m_color: dif.append("Color")
+                    res_row.update({"RESULTADO_RPA": "⚠️ DISCREPANCIA", 
+                                   "DETALLE": f"Difiere en: {', '.join(dif)} | Web: {raza_web}/{sexo_web}/{color_web}"})
+                
+                res_row.update({"NOMBRE_OFICIAL": nombre_web})
             except:
-                res_row.update({"ESTADO": "NO ENCONTRADO", "NOMBRE_ASOCEBU": "N/A"})
+                res_row.update({"RESULTADO_RPA": "❌ NO ENCONTRADO", "DETALLE": "No hallado en SIR Asocebu", "NOMBRE_OFICIAL": "N/A"})
             
             results.append(res_row)
-            progress_bar.progress((index + 1) / len(df_to_process))
+            progress_bar.progress((index + 1) / len(df_proc))
             
         await browser.close()
         return pd.DataFrame(results)
 
-# --- UI ---
-file = st.file_uploader("Suba el archivo de Inventario", type=["xlsx"])
-
+# --- INTERFAZ USUARIO ---
+file = st.file_uploader("Suba el archivo de Inventario (Excel)", type=["xlsx"])
 if file:
     df_consolidado = procesar_archivo_cliente(file)
-    
     if not df_consolidado.empty:
-        st.info(f"📊 Archivo cargado con {len(df_consolidado)} filas totales.")
+        st.write("### Datos detectados en el archivo:")
         st.dataframe(df_consolidado.head(5))
 
-        if st.button("🚀 Iniciar Auditoría"):
-            df_res = asyncio.run(run_web_automation(df_consolidado, user_select, limit_rows))
+        if st.button("🚀 Iniciar Auditoría Fenotípica"):
+            df_final = asyncio.run(run_web_automation(df_consolidado, limit_rows))
+            st.success("✅ Auditoría completada.")
+            st.dataframe(df_final)
             
-            if not df_res.empty:
-                st.success("✅ Auditoría completada")
-                st.dataframe(df_res)
-                
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    df_res.to_excel(writer, index=False)
-                st.download_button("📥 Descargar Reporte Final", buffer.getvalue(), 
-                                 file_name=f"Resultado_{user_select}.xlsx")
-    else:
-        st.error("No se detectaron datos válidos en el Excel.")
+            # Exportación de reporte final
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                df_final.to_excel(writer, index=False)
+            st.download_button("📥 Descargar Reporte Final", buffer.getvalue(), file_name=f"Resultado_Auditoria_{user_select}.xlsx")
