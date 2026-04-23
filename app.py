@@ -50,7 +50,7 @@ def procesar_archivo_cliente(file):
             
     return pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
 
-# 4. MOTOR DE AUTOMATIZACIÓN CON LÓGICA DE PRECISIÓN
+# 4. MOTOR DE AUTOMATIZACIÓN (LOGICA DE CLIC EN LUPA INTEGRADA)
 async def run_web_automation(df, max_rows):
     results = []
     progress_bar = st.progress(0)
@@ -65,7 +65,6 @@ async def run_web_automation(df, max_rows):
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context()
         page = await context.new_page()
-        await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", timeout=60000)
 
         df_proc = df.head(max_rows).copy()
         for index, row in df_proc.iterrows():
@@ -76,26 +75,21 @@ async def run_web_automation(df, max_rows):
             res_row = row.to_dict()
 
             try:
+                # Navegar al inicio en cada consulta para limpiar estados
+                await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", timeout=60000)
+                
                 # Búsqueda por Registro
                 await page.select_option('select[id*="ddlTipoBusqueda"]', value="1")
                 await page.fill('input[id*="txtBusqueda"]', animal_id)
                 await page.keyboard.press("Enter")
-                await page.wait_for_timeout(3000) # Tiempo de carga de tabla
                 
-                # --- AJUSTE DE PRECISIÓN PARA RESULTADOS MÚLTIPLES ---
-                filas = await page.query_selector_all("tr")
-                target_found = False
-                for fila in filas:
-                    texto = await fila.inner_text()
-                    if animal_id in texto.upper():
-                        lupa = await fila.query_selector('input[type="image"], a.btn-ver, .lupa')
-                        if lupa:
-                            await lupa.click()
-                            target_found = True
-                            break
+                # ESPERA Y CLIC EN LA LUPA: Crucial para entrar a la ficha técnica
+                lupa_selector = 'input[type="image"], a.btn-ver, .lupa, img[src*="lupa"]'
+                await page.wait_for_selector(lupa_selector, timeout=10000)
+                await page.click(lupa_selector)
                 
-                if not target_found: raise Exception("ID no coincide")
-                await page.wait_for_timeout(2000)
+                # Esperar a que cargue la ficha técnica
+                await page.wait_for_selector('#lblRaza', timeout=10000)
                 
                 # Extracción de datos fenotípicos
                 raza_w = (await page.inner_text('#lblRaza')).upper()
@@ -103,7 +97,7 @@ async def run_web_automation(df, max_rows):
                 color_w = (await page.inner_text('#lblColor')).upper()
                 nombre_w = await page.inner_text('#lblNombreAnimal')
 
-                # Validación
+                # Validación contra el Excel
                 m_raza = raza_w in str(row.get(col_grupo, '')).upper() or str(row.get(col_grupo, '')).upper() in raza_w
                 m_sexo = True if not col_sexo else (sexo_w[0] == str(row[col_sexo])[0].upper())
                 m_color = True if not col_color else (color_w in str(row[col_color]).upper())
@@ -114,9 +108,8 @@ async def run_web_automation(df, max_rows):
                     res_row.update({"RESULTADO_RPA": "⚠️ DISCREPANCIA", "INFO_WEB": f"{raza_w}/{sexo_w}/{color_w}"})
                 res_row.update({"NOMBRE_OFICIAL": nombre_w})
                 
-                await page.goto("https://sir.asocebu.com.co/Genealogias/inicio") # Regresar para sig. consulta
             except:
-                res_row.update({"RESULTADO_RPA": "❌ ERROR/NO HALLADO", "INFO_WEB": "N/A"})
+                res_row.update({"RESULTADO_RPA": "❌ NO ENCONTRADO", "INFO_WEB": "N/A", "NOMBRE_OFICIAL": "N/A"})
             
             results.append(res_row)
             progress_bar.progress((index + 1) / len(df_proc))
@@ -125,15 +118,19 @@ async def run_web_automation(df, max_rows):
         return pd.DataFrame(results)
 
 # 5. UI FINAL
-file = st.file_uploader("Suba el archivo de Inventario", type=["xlsx"])
+file = st.file_uploader("Suba el archivo de Inventario (Excel)", type=["xlsx"])
 if file:
     df_c = procesar_archivo_cliente(file)
     if not df_c.empty:
+        st.write(f"### Datos detectados ({len(df_c)} registros):")
         st.dataframe(df_c.head(5))
-        if st.button("🚀 Iniciar Auditoría"):
+        if st.button("🚀 Iniciar Auditoría de Inventario"):
             df_f = asyncio.run(run_web_automation(df_c, limit_rows))
-            st.success("✅ Completado")
+            st.success("✅ Auditoría Completada")
             st.dataframe(df_f)
+            
+            # Preparación de descarga
             buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer) as w: df_f.to_excel(w, index=False)
-            st.download_button("📥 Descargar Reporte", buffer.getvalue(), "Auditoria.xlsx")
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                df_f.to_excel(writer, index=False)
+            st.download_button("📥 Descargar Reporte de Resultados", buffer.getvalue(), "Auditoria_Inventario_Final.xlsx")
