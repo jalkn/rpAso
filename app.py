@@ -42,40 +42,35 @@ async def run_web_automation(df, max_rows):
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        # Contexto persistente con User Agent de humano
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        )
+        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         page = await context.new_page()
 
         df_proc = df.head(max_rows).copy()
         for index, row in df_proc.iterrows():
-            # Limpiamos el registro para que sea siempre texto
             animal_id = str(row["REGISTRO"]).strip().split('.')[0].upper()
-            status_text.text(f"🔍 Validando Registro: {animal_id} ({index+1}/{len(df_proc)})")
+            status_text.text(f"🔍 Validando {index+1}/{len(df_proc)}: {animal_id}")
             res_row = row.to_dict()
 
             try:
-                # 1. Navegación directa
-                await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", wait_until="domcontentloaded", timeout=30000)
+                await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", wait_until="networkidle")
                 
-                # 2. Selección de tipo de búsqueda (Registro = 1)
-                await page.wait_for_selector('select[id*="ddlTipoBusqueda"]', timeout=5000)
-                await page.select_option('select[id*="ddlTipoBusqueda"]', value="1")
+                # 1. Selección robusta por valor
+                await page.select_option('select', value="1")
                 
-                # 3. Llenar búsqueda y presionar Enter
-                input_busqueda = await page.query_selector('input[id*="txtBusqueda"]')
-                await input_busqueda.fill(animal_id)
+                # 2. Llenado y Enter con pequeña pausa
+                await page.fill('input[type="text"]', animal_id)
+                await asyncio.sleep(1)
                 await page.keyboard.press("Enter")
                 
-                # 4. Esperar la lupa o botón 'Ver' (múltiples selectores)
-                btn_ver = await page.wait_for_selector('input[type="image"], .btn-ver, img[src*="lupa"]', timeout=10000)
-                await btn_ver.click()
+                # 3. CLIC EN LA LUPA (Selector múltiple para no fallar)
+                # Buscamos la lupa por imagen, por clase o por tipo
+                lupa_selector = 'input[src*="lupa"], input[type="image"], .btn-ver'
+                await page.wait_for_selector(lupa_selector, timeout=12000)
+                await page.click(lupa_selector)
                 
-                # 5. Esperar la carga de la ficha técnica
-                await page.wait_for_selector('#lblRaza', timeout=10000)
+                # 4. ESPERA DE FICHA
+                await page.wait_for_selector('#lblRaza', timeout=12000)
                 
-                # 6. Extracción de datos con limpieza de espacios
                 raza_w = (await page.inner_text('#lblRaza')).strip().upper()
                 sexo_w = (await page.inner_text('#lblSexo')).strip().upper()
                 color_w = (await page.inner_text('#lblColor')).strip().upper()
@@ -87,12 +82,8 @@ async def run_web_automation(df, max_rows):
                     "NOMBRE_OFICIAL": nombre_w
                 })
 
-            except Exception:
-                res_row.update({
-                    "RESULTADO_RPA": "❌ NO ENCONTRADO", 
-                    "INFO_WEB": "N/A", 
-                    "NOMBRE_OFICIAL": "N/A"
-                })
+            except:
+                res_row.update({"RESULTADO_RPA": "❌ NO ENCONTRADO", "INFO_WEB": "N/A", "NOMBRE_OFICIAL": "N/A"})
             
             results.append(res_row)
             progress_bar.progress((index + 1) / len(df_proc))
@@ -101,18 +92,16 @@ async def run_web_automation(df, max_rows):
         return pd.DataFrame(results)
 
 # --- UI ---
-file = st.file_uploader("Cargar Archivo Excel", type=["xlsx"])
+file = st.file_uploader("Cargar Inventario", type=["xlsx"])
 if file:
     df_c = procesar_archivo_cliente(file)
     if not df_c.empty:
         st.dataframe(df_c.head(3))
-        limit = st.slider("Registros a procesar", 1, 500, 20)
         if st.button("🚀 Iniciar Auditoría"):
-            df_f = asyncio.run(run_web_automation(df_c, limit))
-            st.success("✅ Auditoría finalizada")
+            df_f = asyncio.run(run_web_automation(df_c, 100))
+            st.success("✅ Completado")
             st.dataframe(df_f)
             
             buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                df_f.to_excel(writer, index=False)
+            with pd.ExcelWriter(buffer) as writer: df_f.to_excel(writer, index=False)
             st.download_button("📥 Descargar Reporte", buffer.getvalue(), "Auditoria_Asocebu.xlsx")
