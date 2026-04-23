@@ -23,7 +23,7 @@ def install_playwright():
 
 install_playwright()
 
-# 3. PROCESAMIENTO DE ARCHIVOS EXCEL (MATCH CON TUS PANTALLAZOS)
+# 3. PROCESAMIENTO DE ARCHIVOS EXCEL
 def procesar_archivo_cliente(file):
     xl = pd.ExcelFile(file, engine='openpyxl')
     all_dfs = []
@@ -31,11 +31,9 @@ def procesar_archivo_cliente(file):
         df_raw = pd.read_excel(file, sheet_name=sheet, header=None)
         header_row = 0
         found = False
-        # Escaneo de filas para saltar encabezados informativos (CENTRO, FECHA, RESPONSABLE)
         for i, row in df_raw.iterrows():
             if i > 50: break 
             row_str = " ".join([str(val).upper() for val in row.values if pd.notna(val)])
-            # Buscamos las columnas exactas de tus fotos
             if "N° ANIMAL" in row_str and "REGISTRO" in row_str:
                 header_row = i
                 found = True
@@ -43,24 +41,21 @@ def procesar_archivo_cliente(file):
         
         if found:
             df_clean = pd.read_excel(file, sheet_name=sheet, skiprows=header_row)
-            # Normalizamos nombres de columnas para evitar errores de espacios o caracteres
-            df_clean.columns = [str(c).strip().upper().replace('N°', 'N_').replace(' ', '_').replace('.', '') for c in df_clean.columns]
+            df_clean.columns = [str(c).strip().upper().replace('°', '').replace(' ', '_').replace('.', '') for c in df_clean.columns]
             df_clean = df_clean.loc[:, ~df_clean.columns.str.contains('UNNAMED')]
             df_clean = df_clean.dropna(subset=['REGISTRO'], how='any')
-            
             if not df_clean.empty:
                 df_clean['HOJA_ORIGEN'] = sheet
                 all_dfs.append(df_clean)
             
     return pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
 
-# 4. MOTOR DE AUTOMATIZACIÓN (WEB SCRAPING)
+# 4. MOTOR DE AUTOMATIZACIÓN CON LÓGICA DE PRECISIÓN
 async def run_web_automation(df, max_rows):
     results = []
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    # Mapeo según tus requerimientos: REGISTRO es el ID, GRUPO es la RAZA
     col_id = "REGISTRO" 
     col_grupo = "GRUPO" 
     col_sexo = next((c for c in df.columns if 'SEXO' in c), None)
@@ -70,17 +65,14 @@ async def run_web_automation(df, max_rows):
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context()
         page = await context.new_page()
-        
-        # Acceso directo al portal de Genealogías
         await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", timeout=60000)
 
         df_proc = df.head(max_rows).copy()
         for index, row in df_proc.iterrows():
-            # Limpiamos el dato de Registro
-            animal_id = str(row[col_id]).strip().split('.')[0]
-            if not animal_id or animal_id.lower() in ['nan', 'none', '']: continue
+            animal_id = str(row[col_id]).strip().upper()
+            if not animal_id or animal_id in ['NAN', 'NONE', '']: continue
 
-            status_text.text(f"🔍 Validando {index+1}/{len(df_proc)}: {animal_id} (Sede: {row['HOJA_ORIGEN']})")
+            status_text.text(f"🔍 Validando {index+1}/{len(df_proc)}: {animal_id}")
             res_row = row.to_dict()
 
             try:
@@ -88,36 +80,43 @@ async def run_web_automation(df, max_rows):
                 await page.select_option('select[id*="ddlTipoBusqueda"]', value="1")
                 await page.fill('input[id*="txtBusqueda"]', animal_id)
                 await page.keyboard.press("Enter")
-                await page.wait_for_timeout(2500)
+                await page.wait_for_timeout(3000) # Tiempo de carga de tabla
                 
-                # Extracción de la ficha técnica oficial
-                raza_web = (await page.inner_text('#lblRaza')).upper()
-                sexo_web = (await page.inner_text('#lblSexo')).upper()
-                color_web = (await page.inner_text('#lblColor')).upper()
-                nombre_web = await page.inner_text('#lblNombreAnimal')
+                # --- AJUSTE DE PRECISIÓN PARA RESULTADOS MÚLTIPLES ---
+                filas = await page.query_selector_all("tr")
+                target_found = False
+                for fila in filas:
+                    texto = await fila.inner_text()
+                    if animal_id in texto.upper():
+                        lupa = await fila.query_selector('input[type="image"], a.btn-ver, .lupa')
+                        if lupa:
+                            await lupa.click()
+                            target_found = True
+                            break
+                
+                if not target_found: raise Exception("ID no coincide")
+                await page.wait_for_timeout(2000)
+                
+                # Extracción de datos fenotípicos
+                raza_w = (await page.inner_text('#lblRaza')).upper()
+                sexo_w = (await page.inner_text('#lblSexo')).upper()
+                color_w = (await page.inner_text('#lblColor')).upper()
+                nombre_w = await page.inner_text('#lblNombreAnimal')
 
-                # VALIDACIÓN CUÁDRUPLE (Match de Integridad)
-                grupo_ex = str(row.get(col_grupo, '')).upper()
-                match_raza = raza_web in grupo_ex or grupo_ex in raza_web
-                
-                # Validación de Sexo (Compara la inicial M/F)
-                match_sexo = True if not col_sexo else (sexo_web[0] == str(row[col_sexo])[0].upper())
-                
-                # Validación de Color
-                match_color = True if not col_color else (color_web in str(row[col_color]).upper())
+                # Validación
+                m_raza = raza_w in str(row.get(col_grupo, '')).upper() or str(row.get(col_grupo, '')).upper() in raza_w
+                m_sexo = True if not col_sexo else (sexo_w[0] == str(row[col_sexo])[0].upper())
+                m_color = True if not col_color else (color_w in str(row[col_color]).upper())
 
-                if match_raza and match_sexo and match_color:
-                    res_row.update({"RESULTADO_RPA": "✅ COINCIDE", "INFO_WEB": f"{raza_web} | {sexo_web} | {color_web}"})
+                if m_raza and m_sexo and m_color:
+                    res_row.update({"RESULTADO_RPA": "✅ COINCIDE", "INFO_WEB": f"{raza_w} | {sexo_w} | {color_w}"})
                 else:
-                    dif = []
-                    if not match_raza: dif.append("Grupo/Raza")
-                    if not match_sexo: dif.append("Sexo")
-                    if not match_color: dif.append("Color")
-                    res_row.update({"RESULTADO_RPA": "⚠️ DISCREPANCIA", "INFO_WEB": f"Difiere en: {', '.join(dif)}"})
+                    res_row.update({"RESULTADO_RPA": "⚠️ DISCREPANCIA", "INFO_WEB": f"{raza_w}/{sexo_w}/{color_w}"})
+                res_row.update({"NOMBRE_OFICIAL": nombre_w})
                 
-                res_row.update({"NOMBRE_OFICIAL": nombre_web})
+                await page.goto("https://sir.asocebu.com.co/Genealogias/inicio") # Regresar para sig. consulta
             except:
-                res_row.update({"RESULTADO_RPA": "❌ NO ENCONTRADO", "INFO_WEB": "N/A", "NOMBRE_OFICIAL": "N/A"})
+                res_row.update({"RESULTADO_RPA": "❌ ERROR/NO HALLADO", "INFO_WEB": "N/A"})
             
             results.append(res_row)
             progress_bar.progress((index + 1) / len(df_proc))
@@ -125,20 +124,16 @@ async def run_web_automation(df, max_rows):
         await browser.close()
         return pd.DataFrame(results)
 
-# 5. INTERFAZ DE CARGA Y DESCARGA
+# 5. UI FINAL
 file = st.file_uploader("Suba el archivo de Inventario", type=["xlsx"])
 if file:
     df_c = procesar_archivo_cliente(file)
     if not df_c.empty:
-        st.write(f"### Se detectaron {len(df_c)} registros en el archivo consolidado.")
-        st.dataframe(df_c.head(10))
-        if st.button("🚀 Iniciar Auditoría de Base de Datos"):
-            df_final = asyncio.run(run_web_automation(df_c, limit_rows))
-            st.success("✅ Auditoría finalizada.")
-            st.dataframe(df_final)
-            # Preparación del archivo de salida
+        st.dataframe(df_c.head(5))
+        if st.button("🚀 Iniciar Auditoría"):
+            df_f = asyncio.run(run_web_automation(df_c, limit_rows))
+            st.success("✅ Completado")
+            st.dataframe(df_f)
             buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                df_final.to_excel(writer, index=False)
-            st.download_button("📥 Descargar Reporte de Auditoría", buffer.getvalue(), file_name="Auditoria_Argos_Final.xlsx")
-
+            with pd.ExcelWriter(buffer) as w: df_f.to_excel(w, index=False)
+            st.download_button("📥 Descargar Reporte", buffer.getvalue(), "Auditoria.xlsx")
