@@ -5,14 +5,44 @@ from playwright.async_api import async_playwright
 import os
 import io
 
-st.set_page_config(page_title="RPA Asocebu Maestro", layout="wide")
-st.title("🐄 Auditoría de Registros (Versión de Alta Precisión)")
+st.set_page_config(page_title="RPA Asocebu Pro", layout="wide")
+st.title("🐄 Auditoría de Registros Asocebu")
 
 @st.cache_resource
 def install_playwright():
     os.system("playwright install chromium")
 
 install_playwright()
+
+# NUEVA FUNCIÓN: Busca la cabecera correcta automáticamente
+def robust_read_excel(file):
+    # Intentamos leer el archivo completo primero
+    df_raw = pd.read_excel(file, header=None)
+    
+    # Buscamos la fila que contiene la palabra "REGISTRO"
+    header_row = 0
+    for i, row in df_raw.iterrows():
+        # Convertimos la fila a string y buscamos la palabra clave
+        row_str = " ".join([str(x).upper() for x in row.values if pd.notna(x)])
+        if "REGISTRO" in row_str:
+            header_row = i
+            break
+            
+    # Volvemos a leer desde esa fila
+    file.seek(0)
+    df = pd.read_excel(file, skiprows=header_row)
+    
+    # Limpieza extrema de nombres de columnas
+    df.columns = [str(c).strip().upper().replace(' ', '_').replace('°', '') for c in df.columns]
+    
+    # Si aún no se llama "REGISTRO" exactamente, buscamos la columna que más se le parezca
+    if "REGISTRO" not in df.columns:
+        for col in df.columns:
+            if "REGISTRO" in col:
+                df = df.rename(columns={col: "REGISTRO"})
+                break
+                
+    return df
 
 async def run_web_automation(df, max_rows):
     results = []
@@ -23,44 +53,34 @@ async def run_web_automation(df, max_rows):
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         page = await context.new_page()
 
+        # Asegurarnos de que tenemos la columna antes de empezar
+        if "REGISTRO" not in df.columns:
+            st.error(f"❌ No se encontró la columna 'REGISTRO'. Columnas detectadas: {list(df.columns)}")
+            return pd.DataFrame()
+
         df_proc = df.head(max_rows).copy()
         for index, row in df_proc.iterrows():
             animal_id = str(row["REGISTRO"]).strip().split('.')[0].upper()
             res_row = row.to_dict()
 
             try:
-                # 1. Entrar directamente a la página
-                await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", wait_until="networkidle")
-                
-                # 2. Localizar el frame principal (donde Asocebu guarda sus scripts)
+                await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", wait_until="networkidle", timeout=20000)
                 frame = page.frame_locator('iframe[id*="Principal"]')
                 
-                # 3. Forzar la selección y el llenado usando JavaScript (más rápido y seguro)
-                await frame.locator('select').evaluate('(el, val) => el.value = val', "1")
+                await frame.locator('select').select_option(value="1")
                 await frame.locator('input[type="text"]').fill(animal_id)
-                
-                # 4. Disparar el evento de búsqueda
                 await page.keyboard.press("Enter")
                 
-                # 5. Intentar hacer clic en la lupa con reintento agresivo
                 lupa = frame.locator('input[src*="lupa"], .btn-ver, input[type="image"]').first
-                await lupa.wait_for(state="visible", timeout=15000)
+                await lupa.wait_for(state="visible", timeout=10000)
                 await lupa.click()
                 
-                # 6. Esperar la etiqueta de Raza (que confirma que cargó la ficha)
-                raza_lbl = frame.locator('#lblRaza')
-                await raza_lbl.wait_for(state="visible", timeout=15000)
+                await frame.locator('#lblRaza').wait_for(state="visible", timeout=10000)
                 
-                # 7. Extracción de los 4 datos clave
-                raza = (await raza_lbl.inner_text()).strip()
-                sexo = (await frame.locator('#lblSexo').inner_text()).strip()
-                color = (await frame.locator('#lblColor').inner_text()).strip()
-                nombre = (await frame.locator('#lblNombreAnimal').inner_text()).strip()
-
                 res_row.update({
                     "RESULTADO_RPA": "✅ ENCONTRADO", 
-                    "INFO_WEB": f"{raza} | {sexo} | {color}",
-                    "NOMBRE_OFICIAL": nombre
+                    "INFO_WEB": f"{await frame.locator('#lblRaza').inner_text()} | {await frame.locator('#lblSexo').inner_text()}",
+                    "NOMBRE_OFICIAL": await frame.locator('#lblNombreAnimal').inner_text()
                 })
             except:
                 res_row.update({"RESULTADO_RPA": "❌ NO ENCONTRADO", "INFO_WEB": "N/A", "NOMBRE_OFICIAL": "N/A"})
@@ -71,14 +91,24 @@ async def run_web_automation(df, max_rows):
         await browser.close()
         return pd.DataFrame(results)
 
-# --- INTERFAZ ---
-file = st.file_uploader("Cargar Inventario", type=["xlsx"])
+# --- UI ---
+file = st.file_uploader("Cargar Inventario (Excel)", type=["xlsx"])
 if file:
-    df_c = pd.read_excel(file) # El bot buscará la columna 'REGISTRO'
-    if st.button("🚀 Iniciar Validación"):
-        df_f = asyncio.run(run_web_automation(df_c, 50))
-        st.dataframe(df_f)
-        
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer) as writer: df_f.to_excel(writer, index=False)
-        st.download_button("📥 Descargar Reporte", buffer.getvalue(), "Auditoria_Asocebu.xlsx")
+    with st.spinner("Leyendo archivo..."):
+        df_c = robust_read_excel(file)
+    
+    st.write("### Vista previa de los datos cargados:")
+    st.dataframe(df_c.head(5))
+    
+    if "REGISTRO" in df_c.columns:
+        if st.button("🚀 Iniciar Auditoría"):
+            df_f = asyncio.run(run_web_automation(df_c, 50))
+            if not df_f.empty:
+                st.success("✅ Proceso completado")
+                st.dataframe(df_f)
+                
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer) as writer: df_f.to_excel(writer, index=False)
+                st.download_button("📥 Descargar Resultados", buffer.getvalue(), "Auditoria_Final.xlsx")
+    else:
+        st.error("⚠️ El bot no pudo encontrar una columna llamada 'REGISTRO'. Por favor revisa el formato del Excel.")
