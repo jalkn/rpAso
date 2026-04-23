@@ -54,27 +54,29 @@ async def run_web_automation(df, max_rows):
             try:
                 await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", wait_until="networkidle")
                 
-                # 1. Selección robusta por valor
-                await page.select_option('select', value="1")
+                # BUSCAMOS EL IFRAME (Aquí es donde vive el contenido)
+                frame = page.frame_locator('iframe[id*="Principal"], iframe[name*="Principal"]')
                 
-                # 2. Llenado y Enter con pequeña pausa
-                await page.fill('input[type="text"]', animal_id)
-                await asyncio.sleep(1)
+                # 1. Selección dentro del frame
+                await frame.locator('select').select_option(value="1")
+                
+                # 2. Llenado y Enter
+                await frame.locator('input[type="text"]').fill(animal_id)
                 await page.keyboard.press("Enter")
                 
-                # 3. CLIC EN LA LUPA (Selector múltiple para no fallar)
-                # Buscamos la lupa por imagen, por clase o por tipo
-                lupa_selector = 'input[src*="lupa"], input[type="image"], .btn-ver'
-                await page.wait_for_selector(lupa_selector, timeout=12000)
-                await page.click(lupa_selector)
+                # 3. CLIC EN LA LUPA (Dentro del frame)
+                lupa = frame.locator('input[src*="lupa"], .btn-ver, input[type="image"]').first
+                await lupa.wait_for(timeout=10000)
+                await lupa.click()
                 
-                # 4. ESPERA DE FICHA
-                await page.wait_for_selector('#lblRaza', timeout=12000)
+                # 4. ESPERA DE DATOS (Dentro del frame)
+                raza_loc = frame.locator('#lblRaza')
+                await raza_loc.wait_for(timeout=10000)
                 
-                raza_w = (await page.inner_text('#lblRaza')).strip().upper()
-                sexo_w = (await page.inner_text('#lblSexo')).strip().upper()
-                color_w = (await page.inner_text('#lblColor')).strip().upper()
-                nombre_w = (await page.inner_text('#lblNombreAnimal')).strip().upper()
+                raza_w = (await raza_loc.inner_text()).strip().upper()
+                sexo_w = (await frame.locator('#lblSexo').inner_text()).strip().upper()
+                color_w = (await frame.locator('#lblColor').inner_text()).strip().upper()
+                nombre_w = (await frame.locator('#lblNombreAnimal').inner_text()).strip().upper()
 
                 res_row.update({
                     "RESULTADO_RPA": "✅ ENCONTRADO", 
@@ -97,7 +99,7 @@ if file:
     df_c = procesar_archivo_cliente(file)
     if not df_c.empty:
         st.dataframe(df_c.head(3))
-        if st.button("🚀 Iniciar Auditoría"):
+        if st.button("🚀 Iniciar Auditoría Final"):
             df_f = asyncio.run(run_web_automation(df_c, 100))
             st.success("✅ Completado")
             st.dataframe(df_f)
