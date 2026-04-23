@@ -5,8 +5,8 @@ from playwright.async_api import async_playwright
 import os
 import io
 
-st.set_page_config(page_title="RPA Asocebu Cloud", page_icon="🐄", layout="wide")
-st.title("🐄 Auditoría Integral: Último Intento Cloud")
+st.set_page_config(page_title="RPA Asocebu Pro", page_icon="🐄", layout="wide")
+st.title("🐄 Auditoría de Registros Asocebu")
 
 @st.cache_resource
 def install_playwright():
@@ -41,57 +41,52 @@ async def run_web_automation(df, max_rows):
     status_text = st.empty()
     
     async with async_playwright() as p:
-        # Usamos argumentos de sigilo para evitar bloqueos
-        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        )
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         page = await context.new_page()
 
         df_proc = df.head(max_rows).copy()
         for index, row in df_proc.iterrows():
+            # Limpieza total del registro (quita .0 y espacios)
             animal_id = str(row["REGISTRO"]).strip().split('.')[0].upper()
             status_text.text(f"🔍 Validando {index+1}/{len(df_proc)}: {animal_id}")
             res_row = row.to_dict()
 
             try:
-                # 1. Navegación con espera de carga completa
-                await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", wait_until="networkidle", timeout=45000)
+                await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", wait_until="networkidle", timeout=30000)
                 
-                # 2. Identificar el Frame donde ocurre la magia
-                # Asocebu suele usar 'iframePrincipal' o 'ctl00_iframePrincipal'
-                frame_element = page.frame_locator('iframe[id*="Principal"]')
+                # BUSCADOR DE CONTENIDO EN TODOS LOS FRAMES
+                target_frame = None
+                for frame in page.frames:
+                    if await frame.query_selector('select') is not None:
+                        target_frame = frame
+                        break
                 
-                # 3. Operar dentro del Frame
-                # Seleccionar 'Registro'
-                await frame_element.locator('select').select_option(value="1")
-                # Escribir ID y presionar Enter
-                input_field = frame_element.locator('input[type="text"]')
-                await input_field.fill(animal_id)
-                await page.keyboard.press("Enter")
-                
-                # 4. Espera forzada de la Lupa (selector múltiple)
-                lupa = frame_element.locator('input[src*="lupa"], .btn-ver, input[type="image"]').first
-                await lupa.wait_for(state="visible", timeout=12000)
-                await lupa.click()
-                
-                # 5. Espera de la ficha técnica (el nombre del animal es el ID más estable)
-                await frame_element.locator('#lblNombreAnimal').wait_for(state="visible", timeout=12000)
-                
-                # 6. Extracción de datos
-                raza_w = await frame_element.locator('#lblRaza').inner_text()
-                sexo_w = await frame_element.locator('#lblSexo').inner_text()
-                color_w = await frame_element.locator('#lblColor').inner_text()
-                nombre_w = await frame_element.locator('#lblNombreAnimal').inner_text()
+                if target_frame:
+                    # 1. Configurar búsqueda
+                    await target_frame.select_option('select', value="1")
+                    await target_frame.fill('input[type="text"]', animal_id)
+                    await page.keyboard.press("Enter")
+                    
+                    # 2. Esperar y hacer clic en la lupa
+                    lupa = target_frame.locator('input[src*="lupa"], .btn-ver, input[type="image"]').first
+                    await lupa.wait_for(state="visible", timeout=10000)
+                    await lupa.click()
+                    
+                    # 3. Extraer datos (esperar a que aparezca la raza)
+                    raza_el = target_frame.locator('#lblRaza')
+                    await raza_el.wait_for(state="visible", timeout=10000)
+                    
+                    res_row.update({
+                        "RESULTADO_RPA": "✅ ENCONTRADO", 
+                        "INFO_WEB": f"{await raza_el.inner_text()} | {await target_frame.locator('#lblSexo').inner_text()}",
+                        "NOMBRE_OFICIAL": await target_frame.locator('#lblNombreAnimal').inner_text()
+                    })
+                else:
+                    res_row.update({"RESULTADO_RPA": "❌ ERROR FRAME", "INFO_WEB": "N/A"})
 
-                res_row.update({
-                    "RESULTADO_RPA": "✅ ENCONTRADO", 
-                    "INFO_WEB": f"{raza_w.strip()} | {sexo_w.strip()} | {color_w.strip()}",
-                    "NOMBRE_OFICIAL": nombre_w.strip()
-                })
-
-            except Exception as e:
-                res_row.update({"RESULTADO_RPA": "❌ NO ENCONTRADO", "INFO_WEB": "N/A", "NOMBRE_OFICIAL": "N/A"})
+            except:
+                res_row.update({"RESULTADO_RPA": "❌ NO ENCONTRADO", "INFO_WEB": "N/A"})
             
             results.append(res_row)
             progress_bar.progress((index + 1) / len(df_proc))
@@ -99,18 +94,17 @@ async def run_web_automation(df, max_rows):
         await browser.close()
         return pd.DataFrame(results)
 
-# --- INTERFAZ ---
-file = st.file_uploader("Suba el archivo de Inventario", type=["xlsx"])
+# --- UI ---
+file = st.file_uploader("Cargar Excel", type=["xlsx"])
 if file:
     df_c = procesar_archivo_cliente(file)
     if not df_c.empty:
         st.dataframe(df_c.head(3))
-        if st.button("🚀 Ejecutar Validación Final"):
-            df_f = asyncio.run(run_web_automation(df_c, 100))
-            st.success("✅ Auditoría completada.")
+        if st.button("🚀 Iniciar Validación"):
+            df_f = asyncio.run(run_web_automation(df_c, 50))
+            st.success("✅ Proceso terminado")
             st.dataframe(df_f)
             
             buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                df_f.to_excel(writer, index=False)
-            st.download_button("📥 Descargar Resultados", buffer.getvalue(), "Reporte_Asocebu_Final.xlsx")
+            with pd.ExcelWriter(buffer) as writer: df_f.to_excel(writer, index=False)
+            st.download_button("📥 Descargar Reporte", buffer.getvalue(), "Auditoria_Asocebu.xlsx")
