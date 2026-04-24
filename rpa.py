@@ -4,8 +4,11 @@ import asyncio
 from playwright.async_api import async_playwright
 import io
 
-st.set_page_config(page_title="RPA Asocebu - Llave Maestra", layout="wide")
-st.title("🐄 Auditoría Asocebu: Inyección y Flujo Circular")
+# =========================================================
+# CONFIGURACIÓN DE INTERFAZ - Sniper v2.9 (Foco en Consulta)
+# =========================================================
+st.set_page_config(page_title="RPA Asocebu - Sniper v2.9", layout="wide")
+st.title("🐄 Auditoría Asocebu: Sniper v2.9 (Corrección de Clic)")
 
 def robust_read_excel(file):
     df_raw = pd.read_excel(file, header=None)
@@ -31,110 +34,107 @@ async def run_local_audit(df, num_rows):
     status = st.empty()
     
     async with async_playwright() as p:
-        # Abrimos navegador visible. slow_mo de 1 segundo para estabilidad.
-        browser = await p.chromium.launch(headless=False, slow_mo=1000) 
-        context = await browser.new_context()
+        # Lanzamos navegador con simulación humana lenta para que el portal reaccione
+        browser = await p.chromium.launch(headless=False, slow_mo=1500) 
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        )
         page = await context.new_page()
 
-        await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", wait_until="load", timeout=90000)
+        try:
+            status.text("🔗 Cargando portal...")
+            await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", wait_until="domcontentloaded")
+        except Exception as e:
+            st.error(f"Error de conexión: {e}")
+            await browser.close()
+            return
 
         df_proc = df.head(num_rows).copy()
+        
         for index, row in df_proc.iterrows():
-            animal_id = str(row.get("REGISTRO", "")).strip().split('.')[0]
-            status.info(f"Procesando registro {index+1}/{num_rows}: **{animal_id}**")
+            val = row.get("REGISTRO", "")
+            animal_id = str(val).strip().split('.')[0] if pd.notna(val) else ""
+            if not animal_id or animal_id.lower() == "nan": continue
+
+            status.text(f"🚀 Procesando registro: {animal_id}")
             
             try:
-                # 1. INYECCIÓN RECURSIVA: Busca el campo en todos los iframes y lo llena
-                injection_js = f"""
-                (function() {{
-                    function fillDeep(root, val) {{
-                        // Buscar select y ponerlo en 'Registro'
-                        let sel = root.querySelector('select');
-                        if (sel) {{ sel.value = '1'; sel.dispatchEvent(new Event('change', {{bubbles:true}})); }}
+                # 1. LOCALIZAR FRAME
+                f = None
+                for frame in page.frames:
+                    if "mainFrame" in frame.name or "Genealogias" in frame.url:
+                        f = frame
+                        break
+                
+                if f:
+                    # 2. DIGITACIÓN (Simulación humana verificada)
+                    input_sel = "input[name='txtBusqueda']"
+                    await f.wait_for_selector(input_sel, timeout=10000)
+                    await f.click(input_sel)
+                    await f.fill(input_sel, "")
+                    await f.type(input_sel, animal_id, delay=200)
+                    
+                    # 3. ACCIÓN DE CONSULTA (Sin suponer lupas todavía)
+                    btn_consultar = f.locator("input[name='btnConsultar']")
+                    
+                    # Simulación física: mover mouse al botón antes de clickear
+                    await btn_consultar.hover()
+                    await btn_consultar.click(force=True)
+                    
+                    # 4. ESPERA DE CAMBIO DE PÁGINA
+                    # Esperamos a que el texto de la página cambie para confirmar la consulta
+                    try:
+                        # Buscamos texto que solo aparece tras consultar (como 'Resultados' o 'Propietario')
+                        await f.wait_for_function(
+                            "document.body.innerText.includes('Resultados') || document.body.innerText.includes('Ejemplar')",
+                            timeout=10000
+                        )
                         
-                        // Buscar input de texto
-                        let inp = root.querySelector('input[type="text"]');
-                        if (inp) {{
-                            inp.focus();
-                            inp.value = val;
-                            inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                            inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                            return true;
-                        }}
-                        // Buscar en iframes hijos
-                        let frames = root.querySelectorAll('iframe');
-                        for (let f of frames) {{
-                            try {{
-                                if (fillDeep(f.contentDocument || f.contentWindow.document, val)) return true;
-                            }} catch(e) {{}}
-                        }}
-                        return false;
-                    }}
-                    return fillDeep(document, '{animal_id}');
-                }})();
-                """
-                await page.evaluate(injection_js)
-                await asyncio.sleep(1)
+                        # 5. SOLO SI CAMBIÓ LA PÁGINA, BUSCAMOS LA LUPA O DATOS
+                        lupa = f.locator("input[src*='lupa']").first
+                        if await lupa.is_visible():
+                            await lupa.click()
+                            # Esperar a que cargue la ficha técnica
+                            await f.wait_for_selector("#lblNombreAnimal", timeout=8000)
+                            
+                            row["NOMBRE_WEB"] = await f.locator("#lblNombreAnimal").inner_text()
+                            row["RESULTADO_RPA"] = "✅ OK"
+                            
+                            # Clic en "Nueva Consulta" para resetear el flujo
+                            await f.locator("input[value*='Nueva']").first.click()
+                        else:
+                            row["RESULTADO_RPA"] = "⚠️ REGISTRO NO ENCONTRADO"
 
-                # 2. CLIC EN CONSULTAR (Lupa)
-                # Buscamos el botón en todos los frames posibles
-                btn_clicked = False
-                for f in page.frames:
-                    btn = f.locator("input[src*='lupa'], input[type='image']").first
-                    if await btn.count() > 0:
-                        await btn.click()
-                        btn_clicked = True
-                        break
-                
-                # 3. ENTRAR A LA FICHA (Lupa de la tabla)
-                await asyncio.sleep(2)
-                for f in page.frames:
-                    detalle = f.locator("input[src*='lupa']").nth(1)
-                    if await detalle.count() > 0:
-                        await detalle.click()
-                        break
+                    except Exception:
+                        # Si no cambió el texto, el botón no se hundió. Intentamos Enter.
+                        await page.keyboard.press("Enter")
+                        row["RESULTADO_RPA"] = "⏳ REINTENTO CON ENTER"
+                else:
+                    row["RESULTADO_RPA"] = "❌ ERROR: FRAME"
 
-                # 4. CAPTURA DE DATOS
-                await asyncio.sleep(2)
-                found_data = False
-                for f in page.frames:
-                    nombre_lbl = f.locator("#lblNombreAnimal")
-                    if await nombre_lbl.count() > 0:
-                        row["RESULTADO_RPA"] = "✅ EXITOSO"
-                        row["NOMBRE_WEB"] = await nombre_lbl.inner_text()
-                        row["PROPIETARIO"] = await f.locator("#lblPropietarioActual").inner_text()
-                        # CLIC EN "REALIZAR NUEVA CONSULTA" para cerrar el ciclo
-                        await f.locator("input[value*='Nueva'], .btn-primary").first.click()
-                        found_data = True
-                        break
-                
-                if not found_data:
-                    row["RESULTADO_RPA"] = "⚠️ NO SE ENCONTRÓ FICHA"
-
-            except Exception as e:
-                row["RESULTADO_RPA"] = f"❌ ERROR"
-                # Si se pierde, refrescamos la página inicial
+            except Exception:
+                row["RESULTADO_RPA"] = "❌ ERROR TÉCNICO"
                 await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", wait_until="load")
             
             results.append(row)
             progress_bar.progress((index + 1) / len(df_proc))
             
         await browser.close()
-        status.success("✅ Proceso terminado")
         return pd.DataFrame(results)
 
-# --- INTERFAZ ---
-file = st.file_uploader("Subir base de datos (Excel)", type=["xlsx"])
+# --- UI STREAMLIT ---
+file = st.file_uploader("📂 Sube tu Excel", type=["xlsx"])
 if file:
-    df_clean = robust_read_excel(file)
-    st.write(f"Registros listos: {len(df_clean)}")
-    cant = st.number_input("¿Cuántos registros validar?", 1, len(df_clean), 5)
+    df_input = robust_read_excel(file)
+    st.write(f"Registros encontrados: {len(df_input)}")
+    cant = st.number_input("Cantidad a auditar", 1, len(df_input), 5)
     
-    if st.button("🚀 INICIAR AUDITORÍA"):
-        res = asyncio.run(run_local_audit(df_clean, cant))
-        st.dataframe(res)
-        
-        # Descarga
-        output = io.BytesIO()
-        with pd.ExcelWriter(output) as writer: res.to_excel(writer, index=False)
-        st.download_button("📥 Descargar Resultados", output.getvalue(), "Auditoria_Asocebu.xlsx")
+    if st.button("🚀 INICIAR SNIPER"):
+        with st.spinner("Ejecutando auditoría..."):
+            res = asyncio.run(run_local_audit(df_input, cant))
+            if res is not None:
+                st.dataframe(res)
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    res.to_excel(writer, index=False)
+                st.download_button("📥 Descargar Reporte", output.getvalue(), "resultado_asocebu.xlsx")
