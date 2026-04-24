@@ -77,7 +77,7 @@ async def run_backend_audit(df, num_rows):
         await browser.close()
         return pd.DataFrame(results)
 
-# --- UI INTERFAZ ---
+# -- UI INTERFAZ --
 file = st.file_uploader("📂 Sube el Excel", type=["xlsx"])
 if file:
     df_clean = robust_read_excel(file)
