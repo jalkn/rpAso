@@ -11,6 +11,7 @@ st.set_page_config(page_title="RPA Asocebu - Sniper v2.9", layout="wide")
 st.title("🐄 Auditoría Asocebu: Sniper v2.9 (Foco en Consulta)")
 
 def robust_read_excel(file):
+    # Lectura robusta identificando la cabecera 'REGISTRO'
     df_raw = pd.read_excel(file, header=None)
     header_row = 0
     for i, row in df_raw.iterrows():
@@ -34,9 +35,13 @@ async def run_local_audit(df, num_rows):
     status = st.empty()
     
     async with async_playwright() as p:
-        # Lanzamos navegador. Para Streamlit Cloud usa headless=True
-        # Para local, puedes dejar headless=False para ver el proceso.
-        browser = await p.chromium.launch(headless=True, slow_mo=1500) 
+        # Lanzamos navegador. Headless=True es obligatorio en Streamlit Cloud.
+        # Se mantiene slow_mo=1500 para estabilidad y evitar bloqueos.
+        browser = await p.chromium.launch(
+            headless=True, 
+            slow_mo=1500,
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
+        ) 
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
@@ -68,7 +73,7 @@ async def run_local_audit(df, num_rows):
                         break
                 
                 if f:
-                    # 2. DIGITACIÓN (Simulación humana verificada)
+                    # 2. DIGITACIÓN (Simulación humana verificada en rpa.py)
                     input_sel = "input[name='txtBusqueda']"
                     await f.wait_for_selector(input_sel, timeout=10000)
                     await f.click(input_sel)
@@ -87,7 +92,7 @@ async def run_local_audit(df, num_rows):
                             timeout=10000
                         )
                         
-                        # 5. EXTRACCIÓN DE DATOS
+                        # 5. EXTRACCIÓN DE DATOS TRAS CLICK EN LUPA
                         lupa = f.locator("input[src*='lupa']").first
                         if await lupa.is_visible():
                             await lupa.click()
@@ -102,6 +107,7 @@ async def run_local_audit(df, num_rows):
                             row["RESULTADO_RPA"] = "⚠️ REGISTRO NO ENCONTRADO"
 
                     except Exception:
+                        # Reintento con Enter si el botón falla
                         await page.keyboard.press("Enter")
                         row["RESULTADO_RPA"] = "⏳ REINTENTO CON ENTER"
                 else:
@@ -127,6 +133,7 @@ if file:
     
     if st.button("🚀 INICIAR SNIPER"):
         with st.spinner("Ejecutando auditoría..."):
+            # Ejecución asíncrona compatible con Streamlit Cloud
             res = asyncio.run(run_local_audit(df_input, cant))
             if res is not None:
                 st.dataframe(res)
