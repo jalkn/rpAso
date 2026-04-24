@@ -3,13 +3,13 @@ import pandas as pd
 import asyncio
 from playwright.async_api import async_playwright
 import io
-import os
 
-# Configuración de interfaz profesional
-st.set_page_config(page_title="RPA Asocebu - Desarrollo Consolidado", layout="wide")
-st.title("🐄 Auditoría de Registros: Genealogía Asocebu")
+# =========================================================
+# CONFIGURACIÓN DE INTERFAZ - Sniper v2.9 (Copia de rpa.py)
+# =========================================================
+st.set_page_config(page_title="RPA Asocebu - Sniper v2.9", layout="wide")
+st.title("🐄 Auditoría Asocebu: Sniper v2.9 (Foco en Consulta)")
 
-# Función de lectura robusta identificada en chats previos
 def robust_read_excel(file):
     df_raw = pd.read_excel(file, header=None)
     header_row = 0
@@ -28,129 +28,109 @@ def robust_read_excel(file):
             break
     return df
 
-async def run_audit_flow(df, num_rows):
+async def run_local_audit(df, num_rows):
     results = []
     progress_bar = st.progress(0)
     status = st.empty()
     
     async with async_playwright() as p:
-        # Configuración para Streamlit Cloud (Headless obligatorio)
-        browser = await p.chromium.launch(
-            headless=True, 
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
-        ) 
-        # Emulación de agente real para evitar bloqueos de IP/Bot
+        # Lanzamos navegador. Para Streamlit Cloud usa headless=True
+        # Para local, puedes dejar headless=False para ver el proceso.
+        browser = await p.chromium.launch(headless=True, slow_mo=1500) 
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
 
-        # URL del portal de Genealogías
-        url_inicio = "https://sir.asocebu.com.co/Genealogias/inicio"
-        
+        try:
+            status.text("🔗 Cargando portal...")
+            await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", wait_until="domcontentloaded")
+        except Exception as e:
+            st.error(f"Error de conexión: {e}")
+            await browser.close()
+            return
+
         df_proc = df.head(num_rows).copy()
+        
         for index, row in df_proc.iterrows():
-            animal_id = str(row.get("REGISTRO", "")).strip().split('.')[0]
-            status.info(f"Procesando registro {index+1}/{num_rows}: **{animal_id}**")
+            val = row.get("REGISTRO", "")
+            animal_id = str(val).strip().split('.')[0] if pd.notna(val) else ""
+            if not animal_id or animal_id.lower() == "nan": continue
+
+            status.text(f"🚀 Procesando registro: {animal_id}")
             
             try:
-                await page.goto(url_inicio, wait_until="networkidle", timeout=60000)
-                
-                # Lógica de Inyección y Selección de Frame (desarrollo rpa asocebu)
-                # Se busca el selector de 'Registro' (value='1')
-                injection_js = f"""
-                (function() {{
-                    function findAndFill(root, val) {{
-                        let sel = root.querySelector('select');
-                        if (sel) {{ 
-                            sel.value = '1'; 
-                            sel.dispatchEvent(new Event('change', {{bubbles:true}})); 
-                        }}
-                        let inp = root.querySelector('input[type="text"]');
-                        if (inp) {{
-                            inp.focus();
-                            return inp;
-                        }}
-                        let frames = root.querySelectorAll('iframe');
-                        for (let f of frames) {{
-                            try {{
-                                let found = findAndFill(f.contentDocument || f.contentWindow.document, val);
-                                if (found) return found;
-                            }} catch(e) {{}}
-                        }}
-                        return null;
-                    }}
-                    window._targetInput = findAndFill(document, '{animal_id}');
-                }})();
-                """
-                await page.evaluate(injection_js)
-                
-                # Emulación de escritura física (tecleo real) para saltar validaciones JS
-                await page.keyboard.type(animal_id, delay=100)
-                await asyncio.sleep(1)
-
-                # Clic en Consultar (Lupa) - Búsqueda en frames
-                clicked = False
-                for f in page.frames:
-                    lupa = f.locator("input[src*='lupa'], input[type='image']").first
-                    if await lupa.count() > 0:
-                        await lupa.click()
-                        clicked = True
+                # 1. LOCALIZAR FRAME (Lógica de rpa.py)
+                f = None
+                for frame in page.frames:
+                    if "mainFrame" in frame.name or "Genealogias" in frame.url:
+                        f = frame
                         break
                 
-                await asyncio.sleep(2)
+                if f:
+                    # 2. DIGITACIÓN (Simulación humana verificada)
+                    input_sel = "input[name='txtBusqueda']"
+                    await f.wait_for_selector(input_sel, timeout=10000)
+                    await f.click(input_sel)
+                    await f.fill(input_sel, "")
+                    await f.type(input_sel, animal_id, delay=200)
+                    
+                    # 3. ACCIÓN DE CONSULTA
+                    btn_consultar = f.locator("input[name='btnConsultar']")
+                    await btn_consultar.hover()
+                    await btn_consultar.click(force=True)
+                    
+                    # 4. ESPERA DE CAMBIO DE PÁGINA
+                    try:
+                        await f.wait_for_function(
+                            "document.body.innerText.includes('Resultados') || document.body.innerText.includes('Ejemplar')",
+                            timeout=10000
+                        )
+                        
+                        # 5. EXTRACCIÓN DE DATOS
+                        lupa = f.locator("input[src*='lupa']").first
+                        if await lupa.is_visible():
+                            await lupa.click()
+                            await f.wait_for_selector("#lblNombreAnimal", timeout=8000)
+                            
+                            row["NOMBRE_WEB"] = await f.locator("#lblNombreAnimal").inner_text()
+                            row["RESULTADO_RPA"] = "✅ OK"
+                            
+                            # Clic en "Nueva Consulta" para resetear el flujo
+                            await f.locator("input[value*='Nueva']").first.click()
+                        else:
+                            row["RESULTADO_RPA"] = "⚠️ REGISTRO NO ENCONTRADO"
 
-                # Extracción de Ficha (rpa asocebu genealogy)
-                found_data = False
-                for f in page.frames:
-                    # Entrar a la lupa del resultado
-                    detalle_btn = f.locator("input[src*='lupa']").nth(1) if await f.locator("input[src*='lupa']").count() > 1 else None
-                    if detalle_btn and await detalle_btn.count() > 0:
-                        await detalle_btn.click()
-                        await asyncio.sleep(2)
-                        
-                        # Captura de campos clave
-                        row["RESULTADO_RPA"] = "✅ EXITOSO"
-                        row["NOMBRE_WEB"] = await f.locator("#lblNombreAnimal").inner_text() if await f.locator("#lblNombreAnimal").count() > 0 else "N/A"
-                        row["RAZA"] = await f.locator("#lblRaza").inner_text() if await f.locator("#lblRaza").count() > 0 else "N/A"
-                        row["SEXO"] = await f.locator("#lblSexo").inner_text() if await f.locator("#lblSexo").count() > 0 else "N/A"
-                        
-                        # Flujo circular: Regresar para nueva consulta
-                        nueva_btn = f.locator("input[value*='Nueva'], .btn-primary").first
-                        if await nueva_btn.count() > 0: await nueva_btn.click()
-                        
-                        found_data = True
-                        break
-                
-                if not found_data:
-                    row["RESULTADO_RPA"] = "⚠️ NO ENCONTRADO"
+                    except Exception:
+                        await page.keyboard.press("Enter")
+                        row["RESULTADO_RPA"] = "⏳ REINTENTO CON ENTER"
+                else:
+                    row["RESULTADO_RPA"] = "❌ ERROR: FRAME"
 
             except Exception:
-                row["RESULTADO_RPA"] = "❌ ERROR DE CARGA"
+                row["RESULTADO_RPA"] = "❌ ERROR TÉCNICO"
+                await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", wait_until="load")
             
             results.append(row)
             progress_bar.progress((index + 1) / len(df_proc))
             
         await browser.close()
-        status.success("✅ Auditoría terminada")
+        status.success("✅ Auditoría completada")
         return pd.DataFrame(results)
 
-# --- UI INTERFAZ ---
-uploaded_file = st.file_uploader("Cargar Inventario (Excel)", type=["xlsx"])
-if uploaded_file:
-    df_clean = robust_read_excel(uploaded_file)
-    st.info(f"Registros válidos encontrados: {len(df_clean)}")
+# --- UI STREAMLIT ---
+file = st.file_uploader("📂 Sube tu Excel", type=["xlsx"])
+if file:
+    df_input = robust_read_excel(file)
+    st.write(f"Registros encontrados: {len(df_input)}")
+    cant = st.number_input("Cantidad a auditar", 1, len(df_input), 5)
     
-    col1, col2 = st.columns(2)
-    with col1:
-        cantidad = st.number_input("Registros a procesar", 1, len(df_clean), 10)
-    
-    if st.button("🚀 Iniciar Proceso Circular"):
-        res_df = asyncio.run(run_audit_flow(df_clean, cantidad))
-        st.dataframe(res_df)
-        
-        # Exportación de resultados
-        to_download = io.BytesIO()
-        with pd.ExcelWriter(to_download) as writer:
-            res_df.to_excel(writer, index=False)
-        st.download_button("📥 Descargar Reporte Final", to_download.getvalue(), "Auditoria_Final_Asocebu.xlsx")
+    if st.button("🚀 INICIAR SNIPER"):
+        with st.spinner("Ejecutando auditoría..."):
+            res = asyncio.run(run_local_audit(df_input, cant))
+            if res is not None:
+                st.dataframe(res)
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    res.to_excel(writer, index=False)
+                st.download_button("📥 Descargar Reporte", output.getvalue(), "resultado_asocebu.xlsx")
