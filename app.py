@@ -15,29 +15,18 @@ def install_playwright():
 install_playwright()
 
 def robust_read_excel(file):
-    # 1. Leer el Excel sin asumir cabeceras primero
     df_raw = pd.read_excel(file, header=None)
-    
-    # 2. Buscar la fila donde realmente están los títulos
     header_row = 0
     for i, row in df_raw.iterrows():
         row_values = [str(x).upper() for x in row.values if pd.notna(x)]
         if any("REGISTRO" in val for val in row_values):
             header_row = i
             break
-    
-    # 3. Re-leer desde esa fila
     file.seek(0)
     df = pd.read_excel(file, skiprows=header_row)
-    
-    # 4. Limpieza agresiva de nombres de columnas (quitar espacios, puntos, etc.)
     df.columns = [str(c).strip().upper().replace(' ', '_').replace('.', '').replace('N°', 'N') for c in df.columns]
-    
-    # 5. Mapeo inteligente: Si no se llama 'REGISTRO' exacto, buscar la mejor opción
     col_map = {col: "REGISTRO" for col in df.columns if "REGISTRO" in col}
-    df = df.rename(columns=col_map)
-    
-    return df
+    return df.rename(columns=col_map)
 
 async def run_web_automation(df, max_rows):
     results = []
@@ -51,9 +40,9 @@ async def run_web_automation(df, max_rows):
 
         df_proc = df.head(max_rows).copy()
         for index, row in df_proc.iterrows():
-            # Manejo seguro del ID del animal
-            val_reg = row.get("REGISTRO", "")
-            animal_id = str(val_reg).strip().split('.')[0].upper()
+            # Limpieza profunda del ID
+            val_reg = str(row.get("REGISTRO", "")).strip().split('.')[0]
+            animal_id = "".join(filter(str.isalnum, val_reg)).upper() # Solo letras y números
             
             status_text.text(f"🔍 Validando {index+1}/{len(df_proc)}: {animal_id}")
             res_row = row.to_dict()
@@ -64,23 +53,38 @@ async def run_web_automation(df, max_rows):
                 continue
 
             try:
-                await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", wait_until="networkidle", timeout=30000)
+                # 1. Carga con tiempo de gracia para scripts pesados
+                await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", wait_until="load", timeout=40000)
                 frame = page.frame_locator('iframe[id*="Principal"]')
                 
-                await frame.locator('select').select_option(value="1")
-                await frame.locator('input[type="text"]').fill(animal_id)
-                await page.keyboard.press("Enter")
+                # 2. Selección del tipo de búsqueda
+                dropdown = frame.locator('select')
+                await dropdown.wait_for(state="visible")
+                await dropdown.select_option(value="1")
                 
-                lupa = frame.locator('input[src*="lupa"], .btn-ver, input[type="image"]').first
-                await lupa.wait_for(state="visible", timeout=12000)
+                # 3. Llenado con pausa (simula escritura humana)
+                input_field = frame.locator('input[type="text"]')
+                await input_field.click()
+                await input_field.fill(animal_id)
+                await asyncio.sleep(1) # Pausa crítica para que el sitio procese el input
+                
+                # 4. Clic en la lupa (usando el selector más específico posible)
+                lupa = frame.locator('input[src*="lupa"], input[type="image"], .btn-ver').first
                 await lupa.click()
                 
-                await frame.locator('#lblRaza').wait_for(state="visible", timeout=12000)
+                # 5. Espera de la ficha técnica (esperamos el label de la Raza)
+                raza_lbl = frame.locator('#lblRaza')
+                await raza_lbl.wait_for(state="visible", timeout=15000)
                 
+                # 6. Extracción
+                raza = await raza_lbl.inner_text()
+                sexo = await frame.locator('#lblSexo').inner_text()
+                nombre = await frame.locator('#lblNombreAnimal').inner_text()
+
                 res_row.update({
                     "RESULTADO_RPA": "✅ ENCONTRADO", 
-                    "INFO_WEB": f"{await frame.locator('#lblRaza').inner_text()} | {await frame.locator('#lblSexo').inner_text()}",
-                    "NOMBRE_OFICIAL": await frame.locator('#lblNombreAnimal').inner_text()
+                    "INFO_WEB": f"{raza.strip()} | {sexo.strip()}",
+                    "NOMBRE_OFICIAL": nombre.strip()
                 })
             except:
                 res_row.update({"RESULTADO_RPA": "❌ NO ENCONTRADO", "INFO_WEB": "N/A", "NOMBRE_OFICIAL": "N/A"})
@@ -91,23 +95,14 @@ async def run_web_automation(df, max_rows):
         await browser.close()
         return pd.DataFrame(results)
 
-# --- INTERFAZ ---
-file = st.file_uploader("Cargar Archivo de Inventario", type=["xlsx"])
+# --- UI ---
+file = st.file_uploader("Subir Inventario", type=["xlsx"])
 if file:
-    with st.spinner("Analizando estructura del Excel..."):
-        df_c = robust_read_excel(file)
-    
-    st.write("### Datos detectados:")
-    st.dataframe(df_c.head(5))
-    
-    if "REGISTRO" in df_c.columns:
-        if st.button("🚀 Iniciar Validación de Datos"):
-            df_f = asyncio.run(run_web_automation(df_c, 50))
-            st.success("✅ Proceso finalizado")
-            st.dataframe(df_f)
-            
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer) as writer: df_f.to_excel(writer, index=False)
-            st.download_button("📥 Descargar Reporte Final", buffer.getvalue(), "Auditoria_Asocebu_Corregida.xlsx")
-    else:
-        st.error("No se detectó la columna 'REGISTRO'. Verifique que el nombre esté escrito correctamente en el Excel.")
+    df_c = robust_read_excel(file)
+    st.write("Registros detectados:", len(df_c))
+    if st.button("🚀 Iniciar Auditoría"):
+        df_f = asyncio.run(run_web_automation(df_c, 100))
+        st.dataframe(df_f)
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer) as writer: df_f.to_excel(writer, index=False)
+        st.download_button("📥 Descargar Reporte", buffer.getvalue(), "Auditoria_Asocebu.xlsx")
