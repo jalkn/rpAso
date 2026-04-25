@@ -4,8 +4,9 @@ import asyncio
 from playwright.async_api import async_playwright
 import io
 
-st.set_page_config(page_title="RPA Asocebu - Sniper v3.0", layout="wide")
-st.title("🐄 Auditoría Asocebu: Sniper v3.0 (Zero-Session Edition)")
+# --- CONFIGURACIÓN DE INTERFAZ ---
+st.set_page_config(page_title="RPA Asocebu - Sniper v3.1", layout="wide")
+st.title("🐄 Auditoría Asocebu: Sniper v3.1 (Aislamiento Total)")
 
 def robust_read_excel(file):
     df_raw = pd.read_excel(file, header=None)
@@ -19,58 +20,63 @@ def robust_read_excel(file):
     file.seek(0)
     df = pd.read_excel(file, skiprows=header_row)
     df.columns = [str(c).strip().upper().replace(' ', '_') for c in df.columns]
-    if "REGISTRO" not in df.columns:
-        for col in df.columns:
-            if "REGISTRO" in col:
-                df = df.rename(columns={col: "REGISTRO"})
-                break
+    # Asegurar que la columna REGISTRO sea identificada
+    for col in df.columns:
+        if "REGISTRO" in col:
+            df = df.rename(columns={col: "REGISTRO"})
+            break
     return df
 
-async def run_hybrid_audit(df, num_rows):
+async def run_isolated_audit(df, num_rows):
     results = []
     progress_bar = st.progress(0)
     status = st.empty()
     
     async with async_playwright() as p:
-        # headless=True es vital para Streamlit Cloud
-        browser = await p.chromium.launch(headless=True, slow_mo=800)
+        # headless=True es obligatorio en la nube
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
         
         df_proc = df.head(num_rows).copy()
         
         for index, row in df_proc.iterrows():
             animal_id = str(row.get("REGISTRO", "")).strip().split('.')[0]
-            status.info(f"🚀 Procesando: **{animal_id}** ({index+1}/{num_rows})")
+            if not animal_id or animal_id.lower() == "nan": continue
             
-            # CREAMOS UN CONTEXTO NUEVO POR CADA ANIMAL (Borra cookies/caché)
+            status.info(f"🧬 Procesando en entorno limpio: **{animal_id}** ({index+1}/{num_rows})")
+            
+            # PASO CLAVE: Crear contexto y página nuevos para cada registro
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             )
             page = await context.new_page()
 
             try:
-                # Navegación directa al frame de consulta si es posible
+                # Navegación con timeout generoso
                 await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", wait_until="networkidle", timeout=45000)
                 
+                # Localización del frame
                 f = next((fr for fr in page.frames if "mainFrame" in fr.name or "Genealogias" in fr.url), None)
                 
                 if f:
-                    # Llenado con delay humano
+                    # Inyección de datos
+                    await f.wait_for_selector("input[name='txtBusqueda']", timeout=10000)
                     await f.fill("input[name='txtBusqueda']", "")
                     await f.type("input[name='txtBusqueda']", animal_id, delay=150)
                     
-                    # Esperamos la respuesta del servidor ASPX
+                    # Espera de la respuesta del servidor tras el click
                     async with page.expect_response(lambda r: ".aspx" in r.url, timeout=20000):
                         await f.click("input[name='btnConsultar']")
                     
-                    await asyncio.sleep(2.5)
+                    # Tiempo de renderizado
+                    await asyncio.sleep(3)
                     
-                    # Lógica de extracción de nombre
+                    # Extracción de información
                     nombre_lbl = f.locator("#lblNombreAnimal")
                     if await nombre_lbl.count() > 0:
                         row["NOMBRE_WEB"] = await nombre_lbl.inner_text()
                         row["RESULTADO_RPA"] = "✅ EXITOSO"
                     else:
-                        # Si hay tabla de resultados, click en la primera lupa
+                        # Intento por Lupa si hay tabla de resultados
                         lupa = f.locator("input[src*='lupa']").first
                         if await lupa.count() > 0:
                             await lupa.click()
@@ -80,12 +86,12 @@ async def run_hybrid_audit(df, num_rows):
                         else:
                             row["RESULTADO_RPA"] = "⚠️ NO ENCONTRADO"
                 else:
-                    row["RESULTADO_RPA"] = "❌ ERROR: PORTAL CAÍDO"
+                    row["RESULTADO_RPA"] = "❌ ERROR: FRAME NO CARGÓ"
 
             except Exception as e:
                 row["RESULTADO_RPA"] = "❌ ERROR DE FLUJO"
             
-            # CERRAMOS CONTEXTO (Limpieza total)
+            # Limpieza absoluta de la sesión
             await context.close()
             results.append(row)
             progress_bar.progress((index + 1) / len(df_proc))
@@ -93,17 +99,20 @@ async def run_hybrid_audit(df, num_rows):
         await browser.close()
         return pd.DataFrame(results)
 
-# --- INTERFAZ ---
-file = st.file_uploader("📂 Sube el Inventario (Excel)", type=["xlsx"])
+# --- UI STREAMLIT ---
+file = st.file_uploader("📂 Sube tu archivo Excel", type=["xlsx"])
 if file:
     df_clean = robust_read_excel(file)
-    cant = st.number_input("Cantidad de registros a auditar", 1, len(df_clean), 10)
+    st.success(f"Registros listos: {len(df_clean)}")
+    cant = st.number_input("Cantidad a procesar", 1, len(df_clean), 10)
     
-    if st.button("🚀 INICIAR SNIPER V3.0"):
-        res = asyncio.run(run_hybrid_audit(df_clean, cant))
-        st.dataframe(res)
-        
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            res.to_excel(writer, index=False)
-        st.download_button("📥 Descargar Resultados", output.getvalue(), "auditoria_asocebu.xlsx")
+    if st.button("🚀 INICIAR SNIPER V3.1"):
+        res = asyncio.run(run_isolated_audit(df_clean, cant))
+        if res is not None:
+            st.dataframe(res)
+            
+            # Exportación final
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                res.to_excel(writer, index=False)
+            st.download_button("📥 Descargar Reporte Final", output.getvalue(), "auditoria_final.xlsx")
