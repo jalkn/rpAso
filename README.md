@@ -1,55 +1,49 @@
 # 🐄 RPA Asocebu - Auditoría de Inventario Ganadero
 
-Esta es una solución de automatización robótica de procesos (RPA) diseñada para agilizar la conciliación de inventarios bovinos ante la plataforma de **Asocebu**. La herramienta permite procesar archivos masivos de potreros y validar la existencia y datos de los semovientes de forma automática.
+Esta es una solución de automatización robótica de procesos (RPA) de alto rendimiento diseñada para agilizar la conciliación de inventarios bovinos ante la plataforma **Asocebu**. La herramienta permite procesar archivos masivos de potreros y validar la integridad de los datos de forma automática y precisa.
 
 ## 🚀 Acceso a la Aplicación
-La herramienta está desplegada como una plataforma SaaS (Software as a Service) y no requiere instalación local ni permisos de administrador:
+La herramienta está optimizada para su ejecución como plataforma web, eliminando la necesidad de instalaciones complejas:
 👉 **[rpasocebu.streamlit.app](https://rpasocebu.streamlit.app/)**
 
 ---
 
 ## 🛠️ Stack Tecnológico
-El proyecto ha sido desarrollado siguiendo estándares modernos de ingeniería de software:
+El proyecto utiliza estándares de ingeniería de software para garantizar velocidad y estabilidad:
 
 * **Lenguaje:** [Python 3.12](https://www.python.org/)
-* **Automatización Web:** [Playwright](https://playwright.dev/) (Motor de alta velocidad para navegación controlada por script).
-* **Procesamiento de Datos:** [Pandas](https://pandas.pydata.org/) & [OpenPyXL](https://openpyxl.readthedocs.io/) (Data Science para manejo de grandes volúmenes de registros).
-* **Interfaz de Usuario:** [Streamlit](https://streamlit.io/) (Framework para aplicaciones web de datos).
+* **Motor de Automatización:** Peticiones directas a nivel de servidor (Backend Sniper) para omitir la carga de interfaces gráficas pesadas.
+* **Procesamiento de Datos:** [Pandas](https://pandas.pydata.org/) & [OpenPyXL](https://openpyxl.readthedocs.io/) para el manejo inteligente de tablas masivas.
+* **Interfaz de Usuario:** [Streamlit](https://streamlit.io/) con estética de dashboard corporativo.
 
 ---
 
 ## 📋 Funcionalidades Principales
-1.  **Limpieza Inteligente de Datos:** El sistema escanea el archivo Excel del cliente, identifica automáticamente la tabla real (omitiendo encabezados decorativos) y normaliza los registros.
-2.  **Procesamiento Multi-Pestaña:** Capacidad de unir automáticamente todos los potreros contenidos en diferentes hojas de un mismo libro de Excel.
-3.  **Auditoría Web Automática:** Navega de forma autónoma por el SIR de Asocebu para validar la información de cada animal.
-4.  **Generación de Reportes:** Exporta los resultados en un archivo Excel (`.xlsx`) listo para la toma de decisiones.
+1.  **Limpieza Inteligente de Datos:** Identificación automática de la tabla de datos real dentro de archivos Excel, ignorando encabezados decorativos o logos.
+2.  **Protocolo de Conexión Directa:** Sistema de "handshake" que gestiona tokens ASP.NET (`__VIEWSTATE`, `__EVENTVALIDATION`) para una comunicación fluida con el portal SIR de Asocebu.
+3.  **Auditoría de Alta Velocidad:** Validación masiva de registros de animales mediante el análisis de respuestas directas del servidor.
+4.  **Generación de Reportes Finales:** Exportación de resultados detallados en formato Excel (`.xlsx`) con diagnósticos de estado por cada animal.
 
 ---
 
 ## ⚙️ Estructura del Repositorio
-* `app.py`: Aplicación principal (SaaS) desplegada en la nube.
-* `main.py`: Versión de escritorio para procesamiento local.
-* `test_login_pro.py`: Script de diagnóstico para validación de credenciales en el portal privado.
-* `.github/workflows/build.yml`: Pipeline de CI/CD para la generación automática del ejecutable (.exe) para Windows.
+* `ganarpa.py`: Aplicación principal que contiene el motor de auditoría y la interfaz de usuario.
+* `requirements.txt`: Dependencias de librerías Python necesarias.
+* `packages.txt`: Dependencias de sistema para el despliegue en la nube.
 
 ---
 
 ## 💻 Instalación Local (Para Desarrolladores)
 Si deseas ejecutar el proyecto localmente o realizar auditorías al código:
 
-1. Clonar el repositorio:
+1. **Clonar el repositorio:**
    ```bash
    git clone [https://github.com/jalkn/rpAso.git](https://github.com/jalkn/rpAso.git)
 
-2. Instalar dependencias:
-    ```bash
-    pip install -r requirements.txt
+2. **Instalar dependencias:**
+   ```bash
+   pip install -r requirements.txt
 
-3. Instalar navegadores de Playwright:
-    ```bash
-    playwright install chromium
-
-
-4. Ejecutar la aplicación web:
-    ```bash
-    streamlit run app.py
+3. **Ejecutar la aplicación:**
+   ```bash
+   streamlit run ganarpa.py
