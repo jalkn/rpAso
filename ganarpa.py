@@ -5,23 +5,23 @@ from bs4 import BeautifulSoup
 import io
 import time
 
-# --- 1. CONFIGURACIÓN DE PÁGINA Y TEMA ---
+# --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Zenergy - Auditoría Asocebu",
+    page_title="ARPA - Auditoría Asocebu",
     page_icon="🐄",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# --- 2. INYECCIÓN DE ESTILO (FONDO BLANCO Y LOOK & FEEL DJANGO) ---
+# --- 2. CLONING IDENTITY (LOGO & BUTTONS) ---
 st.markdown("""
     <style>
-    /* Forzar fondo blanco en toda la app */
-    .stApp {
-        background-color: #ffffff;
+    /* Global Reset to White */
+    .stApp, .main, [data-testid="stHeader"], [data-testid="stVerticalBlock"] {
+        background-color: #ffffff !important;
     }
-    
-    /* Estilo del Header/Navbar similar a los archivos .html previos */
+
+    /* 1. BRANDING: EXACT LOGO FROM LANDING PAGE */
     .custom-navbar {
         background-color: #ffffff;
         padding: 1rem 2rem;
@@ -32,51 +32,120 @@ st.markdown("""
         margin-bottom: 2rem;
     }
     
-    /* Títulos y texto en color oscuro para legibilidad */
-    h1, h2, h3, p, span, label {
-        color: #212529 !important;
-        font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    .logoIN {
+        cursor: pointer;
+        width: 40px;
+        height: 40px;
+        background-color: #0b00a2; /* Azul exacto de la landing */
+        border-radius: 8px;
+        display: inline-flex;
+        position: relative;
+        flex-shrink: 0;
+    }
+    
+    .logoIN::before {
+        content: "";
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        position: absolute;
+        top: 30%;
+        left: 70%;
+        transform: translate(-50%, -50%);
+        background-image: linear-gradient(to right, 
+            #ffffff 2px, transparent 1.5px,
+            transparent 1.5px, #ffffff 1.5px,
+            #ffffff 2px, transparent 1.5px);
+        background-size: 4px 100%; 
     }
 
-    /* Estilo de Tarjetas (Cards) */
+    .navbar-brand-text {
+        color: #0b00a2;
+        font-weight: 800;
+        font-size: 1.5rem;
+        letter-spacing: 2px;
+        margin: 0;
+        line-height: 1;
+    }
+
+    /* 2. BUTTONS & ICONS: FORCED WHITE */
+    div[data-testid="stButton"] button p, 
+    div[data-testid="stDownloadButton"] button p,
+    div[data-testid="stFileUploader"] button p,
+    div[data-testid="stFileUploader"] button svg,
+    div[data-testid="stFileUploader"] button span {
+        color: #ffffff !important;
+        fill: #ffffff !important;
+    }
+
+    [data-testid="stFileUploaderFileName"], 
+    [data-testid="stFileUploaderSmall"] div {
+        color: #ffffff !important;
+        font-weight: 500;
+    }
+
+    div[data-testid="stButton"] button, 
+    div[data-testid="stDownloadButton"] button, 
+    div[data-testid="stFileUploader"] button {
+        background-color: #0b00a2 !important;
+        color: #ffffff !important;
+        border: none !important;
+        padding: 0.7rem 1.5rem !important;
+        border-radius: 4px !important;
+        font-weight: 600 !important;
+        width: 100% !important;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    
+    div[data-testid="stButton"] button:hover, 
+    div[data-testid="stDownloadButton"] button:hover,
+    div[data-testid="stFileUploader"] button:hover {
+        background-color: #08007a !important;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+
+    /* 3. WIDGETS STYLE */
+    [data-testid="stFileUploader"] section {
+        background-color: #ffffff !important;
+        border: 1px dashed #dee2e6 !important;
+    }
+    
+    div[data-testid="stNumberInput"] input {
+        background-color: #ffffff !important;
+        color: #212529 !important;
+        border: 1px solid #e9ecef !important;
+    }
+
+    h1, h2, h3, p, span, label, li {
+        color: #212529 !important;
+    }
+
     .card {
         padding: 1.5rem;
-        border-radius: 0.5rem;
+        border-radius: 0.25rem;
         background-color: #ffffff;
-        border: 1px solid #dee2e6;
+        border: 1px solid #e9ecef;
         box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.05);
         margin-bottom: 1.5rem;
     }
 
-    /* Botón estilo Bootstrap Primary */
-    .stButton>button {
-        background-color: #0d6efd;
-        color: white !important;
-        border-radius: 6px;
-        border: none;
-        padding: 0.6rem 1.2rem;
-        font-weight: 500;
-        transition: all 0.3s;
-    }
-    .stButton>button:hover {
-        background-color: #0b5ed7;
-        border: none;
-    }
-    
-    /* Estilo de la barra de progreso */
-    .stProgress > div > div > div > div {
-        background-color: #0d6efd;
+    .footer-arpa {
+        width: 100%;
+        text-align: center;
+        margin-top: 50px;
+        padding: 20px 0;
+        border-top: 1px solid #e9ecef;
+        color: #6c757d !important;
+        font-size: 0.8rem;
+        letter-spacing: 3px;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. LÓGICA DEL BACKEND (SNIPER ENGINE) ---
+# --- 3. RPA LOGIC ---
 
 def clean_asocebu_excel(file):
-    """
-    Identifies the header row dynamically and cleans the dataframe.
-    (Technical note: Skips logos and decorative rows found in client excels).
-    """
     df_raw = pd.read_excel(file, header=None)
     header_idx = 0
     for i, row in df_raw.iterrows():
@@ -94,115 +163,74 @@ def clean_asocebu_excel(file):
     return df
 
 def consultar_asocebu_pro(registro, session):
-    """
-    Advanced Handshake: Synchronizes ASP.NET tokens and session cookies.
-    (Technical note: POST request targets __VIEWSTATE to emulate browser state).
-    """
     url = "https://sir.asocebu.com.co/Genealogias/inicio"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Origin": "https://sir.asocebu.com.co",
-        "Referer": url
-    }
+    headers = {"User-Agent": "Mozilla/5.0", "Origin": "https://sir.asocebu.com.co"}
     try:
-        # Step 1: Handshake to get fresh session tokens
-        response_get = session.get(url, headers=headers, timeout=15)
-        soup = BeautifulSoup(response_get.text, 'html.parser')
-        
-        # Step 2: Build Payload with dynamic security fields
-        payload = {
-            "txtCriterio": registro,
-            "ddlTipoBusqueda": "1",
-            "btnConsultar": "Consultar"
-        }
-        for hidden in soup.find_all("input", type="hidden"):
-            name = hidden.get("name")
-            if name:
-                payload[name] = hidden.get("value", "")
+        res_get = session.get(url, timeout=10)
+        soup = BeautifulSoup(res_get.text, 'html.parser')
+        payload = {"txtCriterio": registro, "ddlTipoBusqueda": "1", "btnConsultar": "Consultar"}
+        for h in soup.find_all("input", type="hidden"):
+            payload[h.get("name")] = h.get("value", "")
+        res_post = session.post(url, data=payload, timeout=15)
+        if res_post.status_code == 200:
+            return ("✅ REGISTRADO", "Validado en SIR") if registro in res_post.text else ("⚠️ NO ENCONTRADO", "Sin registros")
+        return "❌ ERROR", f"Status {res_post.status_code}"
+    except: return "❌ FALLA", "Error de conexión"
 
-        # Step 3: Execution
-        response_post = session.post(url, data=payload, headers=headers, timeout=20)
-        
-        if response_post.status_code == 200:
-            if registro in response_post.text:
-                return "✅ REGISTRADO", "Encontrado en SIR"
-            return "⚠️ NO ENCONTRADO", "Sin coincidencia en portal"
-        return "❌ ERROR", f"Servidor respondió con {response_post.status_code}"
-    except Exception as e:
-        return "❌ FALLA", f"Error de red: {str(e)}"
+# --- 4. UI LAYOUT ---
 
-# --- 4. INTERFAZ DE USUARIO (FRONTEND) ---
-
-# Navbar simulada
 st.markdown("""
     <div class="custom-navbar">
-        <span style="font-size: 1.5rem;">🐄</span>
-        <h1 style="margin: 0; font-size: 1.25rem; font-weight: 600;">Auditoría de Inventario - Asocebu</h1>
+        <div class="logoIN"></div>
+        <div class="navbar-brand-text">ARPA</div>
+        <div style="color: #6c757d; font-size: 1.1rem; padding-left: 10px; border-left: 1px solid #dee2e6; margin-left: 10px;">
+            Auditoría de Inventario Ganadero
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
-# Contenedor principal
 with st.container():
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown("### Importación de Datos")
-    uploaded_file = st.file_uploader("Arrastre aquí el archivo Excel de potreros", type=["xlsx"])
+    st.markdown("### 📥 Importar Datos")
+    uploaded_file = st.file_uploader("Seleccione el archivo de potrero (.xlsx)", type=["xlsx"])
     st.markdown('</div>', unsafe_allow_html=True)
 
 if uploaded_file:
-    with st.spinner("Analizando archivo..."):
-        df = clean_asocebu_excel(uploaded_file)
-    
+    df = clean_asocebu_excel(uploaded_file)
     if "REGISTRO" in df.columns:
-        st.success(f"Estructura validada: {len(df)} registros detectados.")
+        st.success(f"{len(df)} animales detectados.")
         
-        # Layout de configuración
-        col_setup, _ = st.columns([1, 2])
-        with col_setup:
-            cant = st.number_input("Cantidad de animales a auditar", 1, len(df), 10)
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        cant = st.number_input("Cantidad a auditar", 1, len(df), 10)
         
-        if st.button("🚀 INICIAR AUDITORÍA"):
+        if st.button("🚀 EJECUTAR AUDITORÍA"):
             results = []
-            progress_bar = st.progress(0)
-            session = requests.Session() # Persistencia de cookies necesaria para ASP.NET
+            bar = st.progress(0)
+            session = requests.Session()
             
-            # Ejecución del RPA
             for index, row in df.head(cant).iterrows():
-                reg_raw = str(row["REGISTRO"]).strip().split('.')[0]
-                if reg_raw in ["NAN", "", "None"]: continue
-                
-                estado, detalle = consultar_asocebu_pro(reg_raw, session)
-                row["RESULTADO_RPA"] = estado
-                row["NOTAS_TECNICAS"] = detalle
+                reg = str(row["REGISTRO"]).strip().split('.')[0]
+                if reg in ["NAN", ""]: continue
+                est, det = consultar_asocebu_pro(reg, session)
+                row["RESULTADO_RPA"] = est
+                row["NOTAS"] = det
                 results.append(row)
-                
-                # Actualizar progreso
-                progress_bar.progress((index + 1) / cant)
-                time.sleep(0.4) # Delay preventivo para evitar bloqueos por IP
+                bar.progress((index + 1) / cant)
+                time.sleep(0.3)
 
-            # Mostrar resultados en tabla estilo Django
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("### Vista Previa de Resultados")
-            df_final = pd.DataFrame(results)
-            st.dataframe(df_final, use_container_width=True)
+            st.markdown("### Resultados")
+            df_res = pd.DataFrame(results)
+            st.dataframe(df_res, use_container_width=True)
             
-            # Preparar descarga
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_final.to_excel(writer, index=False)
+                df_res.to_excel(writer, index=False)
             
-            st.download_button(
-                label="📥 Descargar Reporte Completo (Excel)",
-                data=output.getvalue(),
-                file_name="Reporte_Auditoria_Asocebu.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            st.markdown('</div>', unsafe_allow_html=True)
-    else:
-        st.error("Error: No se encontró la columna 'REGISTRO'. Verifique el formato del Excel.")
+            st.download_button("📥 DESCARGAR REPORTE", output.getvalue(), "Reporte_ARPA.xlsx")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-# Pie de página discreto
 st.markdown("""
-    <div style="text-align: center; margin-top: 50px; padding: 20px; color: #6c757d; font-size: 0.8rem;">
-        Zenergy | Tecnología de Auditoría Ganadera
+    <div class="footer-arpa">
+        &copy;  A R P A - Automatización Robótica de Procesos de Auditoría
     </div>
     """, unsafe_allow_html=True)
