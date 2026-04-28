@@ -6,48 +6,41 @@ import io
 import subprocess
 import os
 
-# --- BLOQUE DE INSTALACIÓN CRÍTICA ---
-# Esto asegura que los navegadores existan dentro del contenedor de la nube
-@st.cache_resource
-def force_playwright_install():
+# --- PASO 1: INSTALACIÓN CONTROLADA ---
+def ensure_playwright_installed():
+    # Buscamos si el binario de chromium ya existe en las carpetas de caché de la nube
     try:
-        # Instalamos solo chromium para ahorrar espacio y tiempo
-        subprocess.run(["playwright", "install", "chromium"], check=True)
+        import playwright
+        # Si esto falla, es que no está instalado
         return True
-    except Exception as e:
-        st.error(f"Error instalando componentes de navegación: {e}")
-        return False
+    except ImportError:
+        with st.spinner("Instalando motor de navegación..."):
+            subprocess.run(["pip", "install", "playwright"], check=True)
+            subprocess.run(["playwright", "install", "chromium"], check=True)
+        return True
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Zenergy RPA - Cloud", layout="wide")
-st.title("🐄 Auditoría Asocebu: Motor en la Nube")
+# --- CONFIGURACIÓN DE INTERFAZ ---
+st.set_page_config(page_title="Zenergy RPA - Cloud Ready", layout="wide")
+st.title("🐄 Auditoría Asocebu (Motor Cloud)")
 
-def robust_read_excel(file):
-    df = pd.read_excel(file)
-    df.columns = [str(c).upper().strip() for c in df.columns]
-    for col in df.columns:
-        if "REGISTRO" in col:
-            df = df.rename(columns={col: "REGISTRO"})
-            break
-    return df
-
+# --- LÓGICA DE AUDITORÍA (Simplificada para estabilidad) ---
 async def run_cloud_audit(df, num_rows):
     results = []
     progress_bar = st.progress(0)
     
     async with async_playwright() as p:
-        # headless=True es MANDATORIO en la nube
+        # Argumentos específicos para evitar el error de memoria en la nube
         browser = await p.chromium.launch(
             headless=True, 
             args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
         )
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
 
         try:
-            # Aumentamos el tiempo de espera por la latencia de la nube
+            # Aumentamos el timeout a 2 minutos (la nube es lenta)
             await page.goto("https://sir.asocebu.com.co/Genealogias/inicio", 
                             wait_until="domcontentloaded", 
                             timeout=120000)
@@ -56,13 +49,12 @@ async def run_cloud_audit(df, num_rows):
             for index, row in df_proc.iterrows():
                 animal_id = str(row.get("REGISTRO", "")).strip().split('.')[0]
                 
-                # Inyección JS para bypass de iframes (la forma más estable en la nube)
+                # Inyección JS para bypass de frames
                 injection_js = f"""
                 (function() {{
-                    function findForm(root, val) {{
+                    function solve(root, val) {{
                         let sel = root.querySelector('select');
                         if (sel) {{ sel.value = '1'; sel.dispatchEvent(new Event('change', {{bubbles:true}})); }}
-                        
                         let inp = root.querySelector('input[type="text"]');
                         if (inp) {{
                             inp.value = val;
@@ -72,44 +64,35 @@ async def run_cloud_audit(df, num_rows):
                         }}
                         let frames = root.querySelectorAll('iframe');
                         for (let f of frames) {{
-                            try {{ if (findForm(f.contentDocument || f.contentWindow.document, val)) return true; }} catch(e) {{}}
+                            try {{ if (solve(f.contentDocument || f.contentWindow.document, val)) return true; }} catch(e) {{}}
                         }}
                         return false;
                     }}
-                    return findForm(document, '{animal_id}');
+                    return solve(document, '{animal_id}');
                 }})();
                 """
                 await page.evaluate(injection_js)
-                await asyncio.sleep(8) # La nube procesa más lento
+                await asyncio.sleep(10) # Espera extendida para la nube
 
                 row["RESULTADO_RPA"] = "✅ PROCESADO"
                 results.append(row)
                 progress_bar.progress((index + 1) / len(df_proc))
 
         except Exception as e:
-            st.error(f"Error en el motor: {e}")
+            st.error(f"Error en motor: {e}")
         finally:
             await browser.close()
-            
         return pd.DataFrame(results)
 
-# --- FLUJO DE CONTROL ---
-if force_playwright_install():
-    file = st.file_uploader("📂 Sube tu base database (3).xlsx", type=["xlsx"])
+# --- FLUJO PRINCIPAL ---
+if ensure_playwright_installed():
+    file = st.file_uploader("Sube tu Excel", type=["xlsx"])
     if file:
-        df_input = robust_read_excel(file)
-        st.info(f"Registros listos: {len(df_input)}")
-        cant = st.number_input("Cantidad a procesar", 1, len(df_input), 5)
+        df = pd.read_excel(file)
+        df.columns = [str(c).upper().strip() for c in df.columns]
+        cant = st.number_input("Cantidad", 1, len(df), 5)
         
-        if st.button("🚀 INICIAR SNIPER"):
-            with st.spinner("Ejecutando en la nube de Zenergy..."):
-                res = asyncio.run(run_cloud_audit(df_input, cant))
-                if res is not None:
-                    st.dataframe(res)
-                    # Preparar descarga para el cliente
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                        res.to_excel(writer, index=False)
-                    st.download_button("📥 Descargar Reporte", output.getvalue(), "Auditoria_Asocebu.xlsx")
-else:
-    st.error("El sistema no pudo inicializar los componentes de navegación. Revisa packages.txt.")
+        if st.button("🚀 INICIAR"):
+            with st.spinner("Procesando en la nube de Zenergy..."):
+                res = asyncio.run(run_cloud_audit(df, cant))
+                st.dataframe(res)
