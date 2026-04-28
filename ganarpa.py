@@ -5,8 +5,8 @@ from bs4 import BeautifulSoup
 import io
 import time
 
-st.set_page_config(page_title="Zenergy - Backend Sniper", layout="wide")
-st.title("🐄 Auditoría Asocebu: Motor de Sesión Pro")
+st.set_page_config(page_title="Zenergy - Backend Sniper Pro", layout="wide")
+st.title("🐄 Auditoría Asocebu: Motor de Sesión Blindado")
 
 def clean_asocebu_excel(file):
     df_raw = pd.read_excel(file, header=None)
@@ -25,61 +25,76 @@ def clean_asocebu_excel(file):
             break
     return df
 
-def consultar_asocebu(registro, session):
-    """Mimetismo de sesión para evitar el Error 405"""
+def consultar_asocebu_pro(registro, session):
     url = "https://sir.asocebu.com.co/Genealogias/inicio"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Origin": "https://sir.asocebu.com.co",
         "Referer": url
     }
     
     try:
-        # Paso 1: Obtener la página para activar la sesión y cookies
-        first_resp = session.get(url, headers=headers, timeout=15)
-        soup = BeautifulSoup(first_resp.text, 'html.parser')
+        # 1. Obtener la página actual para extraer los tokens de ASP.NET
+        response_get = session.get(url, headers=headers, timeout=15)
+        soup = BeautifulSoup(response_get.text, 'html.parser')
         
-        # Paso 2: Extraer campos ocultos de seguridad (ViewState)
+        # 2. Mapear TODOS los campos ocultos necesarios para el servidor
         payload = {
             "txtCriterio": registro,
             "ddlTipoBusqueda": "1",
             "btnConsultar": "Consultar"
         }
         
-        # Buscamos inputs ocultos que el servidor de .NET suele requerir
         for hidden in soup.find_all("input", type="hidden"):
-            payload[hidden.get("name")] = hidden.get("value")
+            name = hidden.get("name")
+            value = hidden.get("value", "")
+            if name:
+                payload[name] = value
 
-        # Paso 3: Enviar la consulta real
-        response = session.post(url, data=payload, headers=headers, timeout=20)
+        # 3. Ejecutar el POST con los tokens frescos
+        response_post = session.post(url, data=payload, headers=headers, timeout=20)
         
-        if response.status_code == 200:
-            if registro in response.text:
-                return "✅ REGISTRADO", "Validado"
-            return "⚠️ NO ENCONTRADO", "Sin datos"
-        return "❌ BLOQUEO", f"Status {response.status_code}"
+        if response_post.status_code == 200:
+            # Si el número de registro aparece en la tabla de resultados del HTML
+            if registro in response_post.text:
+                return "✅ REGISTRADO", "Validación Exitosa"
+            return "⚠️ NO ENCONTRADO", "No figura en portal"
+        
+        return "❌ ERROR", f"Status {response_post.status_code}"
     except Exception as e:
-        return "❌ ERROR", "Falla de red"
+        return "❌ FALLA", str(e)
 
-# --- UI ---
-file = st.file_uploader("📂 Sube el archivo Excel", type=["xlsx"])
-if file:
-    df = clean_asocebu_excel(file)
+# --- FLUJO PRINCIPAL ---
+uploaded_file = st.file_uploader("📂 Sube el archivo Excel", type=["xlsx"])
+
+if uploaded_file:
+    df = clean_asocebu_excel(uploaded_file)
     if "REGISTRO" in df.columns:
-        st.success("Archivo estructurado correctamente.")
-        cant = st.number_input("Cantidad", 1, len(df), 5)
+        st.info(f"Estructura válida. {len(df)} animales detectados.")
+        cant = st.number_input("Cantidad a procesar", 1, len(df), 5)
         
-        if st.button("🚀 INICIAR AUDITORÍA"):
+        if st.button("🚀 INICIAR SNIPER"):
             results = []
             progress = st.progress(0)
-            session = requests.Session() # Mantenemos la misma sesión para todo el proceso
+            # Una sola sesión para reutilizar cookies de conexión
+            session = requests.Session()
             
             for index, row in df.head(cant).iterrows():
                 reg = str(row["REGISTRO"]).strip().split('.')[0]
-                estado, detalle = consultar_asocebu(reg, session)
+                if reg in ["NAN", ""]: continue
+                
+                estado, detalle = consultar_asocebu_pro(reg, session)
                 row["RESULTADO_RPA"] = estado
                 row["NOTAS"] = detalle
                 results.append(row)
+                
                 progress.progress((index + 1) / cant)
-                time.sleep(0.5)
+                time.sleep(0.4) # Evitar baneo por velocidad
 
-            st.dataframe(pd.DataFrame(results))
+            df_res = pd.DataFrame(results)
+            st.dataframe(df_res)
+            
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df_res.to_excel(writer, index=False)
+            st.download_button("📥 Descargar Reporte", output.getvalue(), "Auditoria_Final.xlsx")
