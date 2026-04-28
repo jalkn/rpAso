@@ -6,99 +6,80 @@ import io
 import time
 
 st.set_page_config(page_title="Zenergy - Backend Sniper", layout="wide")
-st.title("🐄 Auditoría Asocebu: Conexión Directa")
+st.title("🐄 Auditoría Asocebu: Motor de Sesión Pro")
 
 def clean_asocebu_excel(file):
-    """Limpia el Excel buscando la fila de encabezados real"""
-    # Leemos el excel saltando las filas de logos/títulos iniciales
     df_raw = pd.read_excel(file, header=None)
-    
-    # Buscamos la fila que contiene la palabra 'REGISTRO'
     header_idx = 0
     for i, row in df_raw.iterrows():
         row_str = " ".join([str(x).upper() for x in row.values if pd.notna(x)])
         if "REGISTRO" in row_str:
             header_idx = i
             break
-            
-    # Volvemos a leer desde esa fila
     file.seek(0)
     df = pd.read_excel(file, skiprows=header_idx)
-    
-    # Limpiamos nombres de columnas
     df.columns = [str(c).strip().upper() for c in df.columns]
-    
-    # Renombrar columna de registro si tiene variaciones
     for col in df.columns:
         if "REGISTRO" in col:
             df = df.rename(columns={col: "REGISTRO"})
             break
     return df
 
-def consultar_backend(registro):
-    """Petición directa al servidor de Asocebu"""
+def consultar_asocebu(registro, session):
+    """Mimetismo de sesión para evitar el Error 405"""
     url = "https://sir.asocebu.com.co/Genealogias/inicio"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Content-Type": "application/x-www-form-urlencoded"
+        "Referer": url
     }
     
     try:
-        session = requests.Session()
-        # Payload mínimo necesario para activar la búsqueda
+        # Paso 1: Obtener la página para activar la sesión y cookies
+        first_resp = session.get(url, headers=headers, timeout=15)
+        soup = BeautifulSoup(first_resp.text, 'html.parser')
+        
+        # Paso 2: Extraer campos ocultos de seguridad (ViewState)
         payload = {
             "txtCriterio": registro,
             "ddlTipoBusqueda": "1",
             "btnConsultar": "Consultar"
         }
         
+        # Buscamos inputs ocultos que el servidor de .NET suele requerir
+        for hidden in soup.find_all("input", type="hidden"):
+            payload[hidden.get("name")] = hidden.get("value")
+
+        # Paso 3: Enviar la consulta real
         response = session.post(url, data=payload, headers=headers, timeout=20)
         
         if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            # Si el registro aparece en el cuerpo de la página, es porque la tabla lo encontró
             if registro in response.text:
-                return "✅ REGISTRADO", "Encontrado en base de datos"
-            return "⚠️ NO ENCONTRADO", "Sin coincidencia en portal"
-        return "❌ ERROR", f"Status {response.status_code}"
-    except:
-        return "❌ TIMEOUT", "Error de conexión"
+                return "✅ REGISTRADO", "Validado"
+            return "⚠️ NO ENCONTRADO", "Sin datos"
+        return "❌ BLOQUEO", f"Status {response.status_code}"
+    except Exception as e:
+        return "❌ ERROR", "Falla de red"
 
-# --- INTERFAZ ---
-uploaded_file = st.file_uploader("📂 Sube el archivo 'database (3).xlsx'", type=["xlsx"])
-
-if uploaded_file:
-    with st.spinner("Analizando estructura del archivo..."):
-        df = clean_asocebu_excel(uploaded_file)
-    
+# --- UI ---
+file = st.file_uploader("📂 Sube el archivo Excel", type=["xlsx"])
+if file:
+    df = clean_asocebu_excel(file)
     if "REGISTRO" in df.columns:
-        st.success(f"Columna 'REGISTRO' detectada. {len(df)} animales cargados.")
-        cant = st.number_input("Cantidad a auditar", 1, len(df), 10)
+        st.success("Archivo estructurado correctamente.")
+        cant = st.number_input("Cantidad", 1, len(df), 5)
         
-        if st.button("🚀 INICIAR ESCANEO DE ALTA VELOCIDAD"):
+        if st.button("🚀 INICIAR AUDITORÍA"):
             results = []
             progress = st.progress(0)
-            df_proc = df.head(cant).copy()
+            session = requests.Session() # Mantenemos la misma sesión para todo el proceso
             
-            for index, row in df_proc.iterrows():
+            for index, row in df.head(cant).iterrows():
                 reg = str(row["REGISTRO"]).strip().split('.')[0]
-                if reg == "NAN" or reg == "": continue
-                
-                estado, detalle = consultar_backend(reg)
+                estado, detalle = consultar_asocebu(reg, session)
                 row["RESULTADO_RPA"] = estado
                 row["NOTAS"] = detalle
                 results.append(row)
-                
-                progress.progress((index + 1) / len(df_proc))
-                time.sleep(0.3) # Respeto al servidor
+                progress.progress((index + 1) / cant)
+                time.sleep(0.5)
 
-            df_final = pd.DataFrame(results)
-            st.dataframe(df_final)
-            
-            # Exportar
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_final.to_excel(writer, index=False)
-            st.download_button("📥 Descargar Reporte Final", output.getvalue(), "Auditoria_Zenergy.xlsx")
-    else:
-        st.error("No se pudo identificar la columna de Registros. Verifica que el Excel tenga la palabra 'REGISTRO' en el encabezado.")
+            st.dataframe(pd.DataFrame(results))
