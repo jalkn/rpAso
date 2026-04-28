@@ -5,30 +5,56 @@ from bs4 import BeautifulSoup
 import io
 import time
 
-# --- STREAMLIT UI CONFIGURATION ---
-st.set_page_config(page_title="Zenergy - RPA Backend Sniper", layout="wide")
-st.title("🐄 Asocebu Audit: Direct Session Engine")
+# --- CONFIGURACIÓN DE INTERFAZ (ESTILO DJANGO CUSTOM) ---
+st.set_page_config(page_title="Zenergy - Auditoría Asocebu", layout="wide")
+
+# Inyección de CSS para simular el look & feel del dashboard previo
+st.markdown("""
+    <style>
+    .main { background-color: #f8f9fa; }
+    .stButton>button {
+        background-color: #0d6efd;
+        color: white;
+        border-radius: 5px;
+        border: none;
+        padding: 0.5rem 1rem;
+        font-weight: bold;
+    }
+    .stButton>button:hover { background-color: #0b5ed7; color: white; }
+    .card {
+        padding: 1.5rem;
+        border-radius: 0.5rem;
+        background-color: white;
+        box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+        margin-bottom: 1rem;
+    }
+    h1 { color: #212529; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# Encabezado estilo Navbar
+st.markdown("""
+    <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px;">
+        <i class="fas fa-database" style="font-size: 2rem; color: #0d6efd;"></i>
+        <h1>Importar y Auditar Datos - Asocebu</h1>
+    </div>
+    """, unsafe_allow_html=True)
 
 def clean_asocebu_excel(file):
     """
-    Cleans the uploaded Excel by identifying the dynamic header row.
-    Handles legacy formatting and multiple title rows.
+    Limpieza de datos: identifica la fila de encabezados real.
+    (Technical note: Handles legacy formatting and variable title rows).
     """
     df_raw = pd.read_excel(file, header=None)
     header_idx = 0
-    # Search for the row containing the 'REGISTRO' keyword
     for i, row in df_raw.iterrows():
         row_str = " ".join([str(x).upper() for x in row.values if pd.notna(x)])
         if "REGISTRO" in row_str:
             header_idx = i
             break
-    
     file.seek(0)
     df = pd.read_excel(file, skiprows=header_idx)
-    # Standardize column names to uppercase and trim whitespaces
     df.columns = [str(c).strip().upper() for c in df.columns]
-    
-    # Ensure the main key column is named 'REGISTRO'
     for col in df.columns:
         if "REGISTRO" in col:
             df = df.rename(columns={col: "REGISTRO"})
@@ -37,9 +63,8 @@ def clean_asocebu_excel(file):
 
 def consultar_asocebu_pro(registro, session):
     """
-    Executes a mirrored session handshake to bypass ASP.NET security layers.
-    1. GET: Retrieves session cookies and hidden security tokens (__VIEWSTATE).
-    2. POST: Replicates the browser's form submission with synchronized tokens.
+    Motor de sesión: Handshake sincronizado.
+    (Technical note: GET initial tokens -> POST with __VIEWSTATE and session cookies).
     """
     url = "https://sir.asocebu.com.co/Genealogias/inicio"
     headers = {
@@ -47,80 +72,81 @@ def consultar_asocebu_pro(registro, session):
         "Origin": "https://sir.asocebu.com.co",
         "Referer": url
     }
-    
     try:
-        # STEP 1: INITIAL HANDSHAKE
-        # We request the page to capture active cookies and the current server state
+        # Paso 1: Handshake Inicial
         response_get = session.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(response_get.text, 'html.parser')
         
-        # STEP 2: TOKEN EXTRACTION
-        # Mapping all hidden inputs required by the .NET ViewState validation
+        # Paso 2: Extracción de Tokens de Seguridad
         payload = {
             "txtCriterio": registro,
-            "ddlTipoBusqueda": "1", # Type '1' usually corresponds to 'Registration Number'
+            "ddlTipoBusqueda": "1",
             "btnConsultar": "Consultar"
         }
-        
         for hidden in soup.find_all("input", type="hidden"):
             name = hidden.get("name")
-            value = hidden.get("value", "")
             if name:
-                payload[name] = value
+                payload[name] = hidden.get("value", "")
 
-        # STEP 3: DATA SUBMISSION
-        # Sending the POST request with the freshly acquired tokens
+        # Paso 3: Envío de Petición
         response_post = session.post(url, data=payload, headers=headers, timeout=20)
         
         if response_post.status_code == 200:
-            # Verification logic: checking if the registration ID exists within the result table
             if registro in response_post.text:
-                return "✅ REGISTERED", "Validation Successful"
-            return "⚠️ NOT FOUND", "No records found in portal"
-        
-        # Handling HTTP 405 or other server-side restrictions
-        return "❌ BLOCKED", f"Server Status {response_post.status_code}"
-        
+                return "✅ REGISTRADO", "Validación Exitosa"
+            return "⚠️ NO ENCONTRADO", "Sin registros en portal"
+        return "❌ BLOQUEO", f"Status del Servidor {response_post.status_code}"
     except Exception as e:
-        return "❌ FAILED", f"Connection error: {str(e)}"
+        return "❌ ERROR", f"Falla de conexión: {str(e)}"
 
-# --- MAIN APPLICATION FLOW ---
-uploaded_file = st.file_uploader("📂 Upload 'database.xlsx' for auditing", type=["xlsx"])
+# --- CUERPO PRINCIPAL ---
+with st.container():
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    uploaded_file = st.file_uploader("📂 Seleccione el archivo Excel para iniciar el análisis", type=["xlsx"])
+    st.markdown('</div>', unsafe_allow_html=True)
 
 if uploaded_file:
-    with st.spinner("Processing file structure..."):
-        df = clean_asocebu_excel(uploaded_file)
+    df = clean_asocebu_excel(uploaded_file)
     
     if "REGISTRO" in df.columns:
-        st.info(f"Structure validated. {len(df)} animals detected.")
-        count = st.number_input("Records to process", 1, len(df), 5)
+        st.success(f"Estructura validada: {len(df)} registros detectados.")
         
-        if st.button("🚀 EXECUTE SNIPER"):
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            cant = st.number_input("Cantidad de registros a procesar", 1, len(df), 10)
+        
+        if st.button("🚀 INICIAR AUDITORÍA"):
             results = []
-            progress = st.progress(0)
-            # Persistent session to maintain cookie synchronization
-            session = requests.Session()
+            progress_bar = st.progress(0)
+            session = requests.Session() # Persistencia de sesión (Critical for .NET)
             
-            for index, row in df.head(count).iterrows():
+            for index, row in df.head(cant).iterrows():
                 reg = str(row["REGISTRO"]).strip().split('.')[0]
                 if reg in ["NAN", "", "None"]: continue
                 
-                status, detail = consultar_asocebu_pro(reg, session)
-                row["RPA_RESULT"] = status
-                row["ENGINE_NOTES"] = detail
+                estado, detalle = consultar_asocebu_pro(reg, session)
+                row["RESULTADO_RPA"] = estado
+                row["NOTAS_TECNICAS"] = detalle
                 results.append(row)
                 
-                progress.progress((index + 1) / count)
-                # Anti-ban delay to prevent IP throttling
-                time.sleep(0.5)
+                progress_bar.progress((index + 1) / cant)
+                time.sleep(0.5) # Delay preventivo
 
-            # Display and Export Results
+            # Resultados estilo tabla Django
+            st.markdown("### Resultados del Análisis")
             df_final = pd.DataFrame(results)
-            st.dataframe(df_final)
+            st.dataframe(df_final, use_container_width=True)
             
+            # Exportación
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_final.to_excel(writer, index=False)
-            st.download_button("📥 Download Final Audit Report", output.getvalue(), "Zenergy_Audit_Report.xlsx")
+            
+            st.download_button(
+                label="📥 Descargar Reporte de Auditoría (Excel)",
+                data=output.getvalue(),
+                file_name="Reporte_Auditoria_Asocebu.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
     else:
-        st.error("Header 'REGISTRO' not found. Please check Excel formatting.")
+        st.error("No se detectó la columna 'REGISTRO'. Por favor verifique el formato del archivo.")

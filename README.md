@@ -2,10 +2,6 @@
 
 Esta es una solución de automatización robótica de procesos (RPA) de alto rendimiento diseñada para agilizar la conciliación de inventarios bovinos ante la plataforma **Asocebu**. La herramienta permite procesar archivos masivos de potreros y validar la integridad de los datos de forma automática y precisa.
 
-## 🚀 Acceso a la Aplicación
-La herramienta está optimizada para su ejecución como plataforma web, eliminando la necesidad de instalaciones complejas:
-👉 **[rpasocebu.streamlit.app](https://rpasocebu.streamlit.app/)**
-
 ---
 
 ## 🛠️ Stack Tecnológico
