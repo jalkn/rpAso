@@ -6,94 +6,99 @@ import io
 import time
 
 st.set_page_config(page_title="Zenergy - Backend Sniper", layout="wide")
-st.title("🐄 Auditoría Asocebu: Conexión Directa (Backend)")
-st.markdown("---")
+st.title("🐄 Auditoría Asocebu: Conexión Directa")
 
-def buscar_en_backend(registro):
-    """
-    Simula la petición POST que hace el formulario de Asocebu.
-    """
-    url_base = "https://sir.asocebu.com.co/Genealogias/inicio"
+def clean_asocebu_excel(file):
+    """Limpia el Excel buscando la fila de encabezados real"""
+    # Leemos el excel saltando las filas de logos/títulos iniciales
+    df_raw = pd.read_excel(file, header=None)
     
-    # Headers para parecer un navegador real y evitar bloqueos
+    # Buscamos la fila que contiene la palabra 'REGISTRO'
+    header_idx = 0
+    for i, row in df_raw.iterrows():
+        row_str = " ".join([str(x).upper() for x in row.values if pd.notna(x)])
+        if "REGISTRO" in row_str:
+            header_idx = i
+            break
+            
+    # Volvemos a leer desde esa fila
+    file.seek(0)
+    df = pd.read_excel(file, skiprows=header_idx)
+    
+    # Limpiamos nombres de columnas
+    df.columns = [str(c).strip().upper() for c in df.columns]
+    
+    # Renombrar columna de registro si tiene variaciones
+    for col in df.columns:
+        if "REGISTRO" in col:
+            df = df.rename(columns={col: "REGISTRO"})
+            break
+    return df
+
+def consultar_backend(registro):
+    """Petición directa al servidor de Asocebu"""
+    url = "https://sir.asocebu.com.co/Genealogias/inicio"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Content-Type": "application/x-www-form-urlencoded"
     }
-
+    
     try:
-        # 1. Obtenemos la sesión inicial para capturar cookies o ViewStates si existen
         session = requests.Session()
-        response_intro = session.get(url_base, headers=headers, timeout=15)
-        
-        # 2. Preparamos los datos del formulario (Payload)
-        # Nota: Estos campos deben coincidir exactamente con los 'name' del HTML de Asocebu
+        # Payload mínimo necesario para activar la búsqueda
         payload = {
             "txtCriterio": registro,
-            "ddlTipoBusqueda": "1", # 1 suele ser 'Registro'
+            "ddlTipoBusqueda": "1",
             "btnConsultar": "Consultar"
         }
-
-        # 3. Hacemos la petición directa al backend
-        res = session.post(url_base, data=payload, headers=headers, timeout=20)
         
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            
-            # Buscamos indicios de éxito en el HTML de respuesta
-            # Ajusta estos selectores según lo que veas en el Inspector de Elementos (Network tab)
-            tabla = soup.find('table') 
-            if tabla and registro in tabla.text:
-                return "✅ REGISTRADO", "Verificado en Backend"
-            else:
-                return "⚠️ NO ENCONTRADO", "Sin coincidencia"
-        else:
-            return "❌ ERROR SERVER", f"Código {res.status_code}"
-
-    except Exception as e:
-        return "❌ ERROR CONEXIÓN", str(e)
+        response = session.post(url, data=payload, headers=headers, timeout=20)
+        
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            # Si el registro aparece en el cuerpo de la página, es porque la tabla lo encontró
+            if registro in response.text:
+                return "✅ REGISTRADO", "Encontrado en base de datos"
+            return "⚠️ NO ENCONTRADO", "Sin coincidencia en portal"
+        return "❌ ERROR", f"Status {response.status_code}"
+    except:
+        return "❌ TIMEOUT", "Error de conexión"
 
 # --- INTERFAZ ---
-file = st.file_uploader("📂 Sube tu Excel de 2500 registros", type=["xlsx"])
+uploaded_file = st.file_uploader("📂 Sube el archivo 'database (3).xlsx'", type=["xlsx"])
 
-if file:
-    df = pd.read_excel(file)
-    # Limpieza de columnas
-    df.columns = [str(c).upper().strip() for c in df.columns]
-    reg_col = next((c for c in df.columns if "REGISTRO" in c), None)
-
-    if reg_col:
-        cant = st.number_input("Cantidad a procesar", 1, len(df), 10)
+if uploaded_file:
+    with st.spinner("Analizando estructura del archivo..."):
+        df = clean_asocebu_excel(uploaded_file)
+    
+    if "REGISTRO" in df.columns:
+        st.success(f"Columna 'REGISTRO' detectada. {len(df)} animales cargados.")
+        cant = st.number_input("Cantidad a auditar", 1, len(df), 10)
         
         if st.button("🚀 INICIAR ESCANEO DE ALTA VELOCIDAD"):
             results = []
             progress = st.progress(0)
-            status_text = st.empty()
+            df_proc = df.head(cant).copy()
             
-            df_slice = df.head(cant).copy()
-            
-            for index, row in df_slice.iterrows():
-                val_registro = str(row[reg_col]).strip().split('.')[0]
-                status_text.text(f"Consultando: {val_registro}...")
+            for index, row in df_proc.iterrows():
+                reg = str(row["REGISTRO"]).strip().split('.')[0]
+                if reg == "NAN" or reg == "": continue
                 
-                estado, info = buscar_en_backend(val_registro)
-                
+                estado, detalle = consultar_backend(reg)
                 row["RESULTADO_RPA"] = estado
-                row["DETALLE_BACKEND"] = info
+                row["NOTAS"] = detalle
                 results.append(row)
                 
-                progress.progress((index + 1) / len(df_slice))
-                # Un pequeño sleep para no ser baneados por inundación de peticiones
-                time.sleep(0.5)
+                progress.progress((index + 1) / len(df_proc))
+                time.sleep(0.3) # Respeto al servidor
 
             df_final = pd.DataFrame(results)
-            st.success("¡Proceso terminado!")
             st.dataframe(df_final)
             
-            # Descarga
+            # Exportar
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_final.to_excel(writer, index=False)
-            st.download_button("📥 Descargar Reporte", output.getvalue(), "Auditoria_Backend.xlsx")
+            st.download_button("📥 Descargar Reporte Final", output.getvalue(), "Auditoria_Zenergy.xlsx")
     else:
-        st.error("No encontré la columna 'REGISTRO' en el archivo.")
+        st.error("No se pudo identificar la columna de Registros. Verifica que el Excel tenga la palabra 'REGISTRO' en el encabezado.")
