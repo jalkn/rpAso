@@ -3,4 +3,3 @@ pandas
 playwright
 openpyxl
 xlsxwriter
-asyncio
