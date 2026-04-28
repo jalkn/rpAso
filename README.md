@@ -22,6 +22,22 @@ El proyecto utiliza estándares de ingeniería de software para garantizar veloc
 
 ---
 
+## 📸 Vista Previa de la Interfaz
+
+### 1. Panel de Carga y Configuración
+Interfaz limpia con el branding de **ARPA**, optimizada para la carga de archivos de potrero.
+![Configuración de Auditoría](1.png)
+
+### 2. Ejecución y Análisis en Tiempo Real
+Visualización del progreso de la auditoría y previsualización de los datos procesados.
+![Ejecución de Proceso](2.png)
+
+### 3. Resultados y Exportación
+Consolidado final de validaciones listo para descarga en formato profesional.
+![Resultados Finales](3.png)
+
+---
+
 ## ⚙️ Estructura del Repositorio
 * `ganarpa.py`: Aplicación principal que contiene el motor de auditoría y la interfaz de usuario.
 * `requirements.txt`: Dependencias de librerías Python necesarias.
